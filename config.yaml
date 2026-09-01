@@ -1,0 +1,122 @@
+# =============================================================================
+# tender-ai Konfiguration
+# =============================================================================
+# Alle Werte koennen ueber Umgebungsvariablen mit dem Praefix TENDER_AI_
+# ueberschrieben werden (verschachtelt mit "__", z. B. TENDER_AI_HTTP__TIMEOUT).
+# Secrets gehoeren NICHT hierher, sondern in die .env-Datei.
+
+# --- HTTP / Netzwerkverhalten ------------------------------------------------
+http:
+  timeout: 30.0                 # Sekunden pro Request
+  connect_timeout: 10.0
+  max_retries: 4                # Wiederholungen bei 429/5xx/Netzwerkfehlern
+  backoff_base: 1.0             # Exponential Backoff: base * 2**versuch (+ Jitter)
+  backoff_max: 30.0
+  user_agent: "tender-ai/0.1 (+mailto:kontakt@example.org)"
+  respect_robots: true          # robots.txt wird vor jedem Abruf geprueft
+  requests_per_second: 1.0      # globales Default-Rate-Limit pro Host
+  cache_enabled: true
+  cache_ttl_seconds: 900        # HTTP-Response-Cache (Entwicklung/Wiederholläufe)
+
+# --- Suche (Default-Filter, per CLI ueberschreibbar) -------------------------
+search:
+  keywords: []                  # z. B. ["Monitor", "Bueroausstattung"]
+  cpv_codes: []                 # z. B. ["30231300", "30190000"]
+  countries: ["DEU"]            # ISO-3166-alpha-3, TED-Notation
+  published_within_days: 14
+  min_days_until_deadline: 3    # Ausschreibungen mit zu knapper Frist ueberspringen
+  max_results_per_source: 100
+
+# --- Quellen -----------------------------------------------------------------
+# Jede Quelle ist einzeln aktivierbar. Reihenfolge in "priority" bestimmt,
+# welche Quelle bei Dubletten als Primaerquelle markiert wird (kleiner = besser).
+sources:
+  ted:
+    enabled: true
+    type: ted
+    priority: 10
+    # Offizielle Such-API von TED (Tenders Electronic Daily, EU-Amtsblatt S).
+    # Endpunkt und Feldliste sind bewusst konfigurierbar, weil die TED-API
+    # versioniert wird - bei Aenderungen hier anpassen statt im Code.
+    base_url: "https://api.ted.europa.eu"
+    search_path: "/v3/notices/search"
+    # Optionaler API-Key (aus .env: TENDER_AI_TED_API_KEY). Ohne Key gelten
+    # die anonymen Rate-Limits von TED.
+    auth_header: "Authorization"
+    auth_scheme: "ApiKey"       # ergibt Header: Authorization: ApiKey <key>
+    requests_per_second: 0.5
+    page_size: 50
+    fields:
+      - "publication-number"
+      - "notice-title"
+      - "description-lot"
+      - "buyer-name"
+      - "buyer-country"
+      - "publication-date"
+      - "deadline-receipt-request"
+      - "classification-cpv"
+      - "notice-type"
+      - "procedure-type"
+      - "total-value"
+      - "estimated-value-lot"
+      - "place-performance-country-part"
+      - "links"
+    # Feldnamen der TED-Expert-Query. Falls TED die Notation aendert, hier
+    # anpassen (siehe docs/architecture.md, Abschnitt "Technische Risiken").
+    query_fields:
+      fulltext: "FT"
+      cpv: "classification-cpv"
+      country: "buyer-country"
+      publication_date: "publication-date"
+      deadline: "deadline-receipt-request"
+    # Optional: komplette Expert-Query selbst vorgeben (ueberschreibt den Builder)
+    raw_query: null
+
+  bund_rss:
+    enabled: true
+    type: rss
+    priority: 20
+    requests_per_second: 0.5
+    # Oeffentliche RSS-Feeds von Vergabeportalen. Weitere Feeds koennen hier
+    # ohne Codeaenderung ergaenzt werden.
+    feeds:
+      - name: "service.bund.de Ausschreibungen"
+        url: "https://www.service.bund.de/SiteGlobals/Functions/RSSFeed/DE/RSSNewsfeed/RSSNewsfeed_Ausschreibungen.xml"
+        country: "DEU"
+        authority: null         # falls der Feed genau eine Vergabestelle abbildet
+
+  fixture:
+    enabled: false              # Offline-Demoquelle (data/fixtures/*.json)
+    type: fixture
+    priority: 90
+    path: "data/fixtures/sample_tenders.json"
+
+# --- Dubletten ---------------------------------------------------------------
+dedup:
+  enabled: true
+  title_similarity_threshold: 0.90   # 0..1, fuer den Fallback-Titelvergleich
+  match_window_days: 21              # max. Abstand der Veroeffentlichungsdaten
+
+# --- Mindestkriterien (ab Stufe 4 wirksam, hier bereits vorbereitet) ---------
+criteria:
+  minimum_margin_percent: 15
+  minimum_profit_eur: 500
+  minimum_roi_percent: 20
+  maximum_risk_score: 40
+  minimum_match_confidence: 85
+  minimum_days_until_deadline: 3
+  preferred_currencies: ["EUR"]
+  excluded_categories: []
+
+# --- Score-Klassifizierung (ab Stufe 4 wirksam) ------------------------------
+scoring:
+  thresholds:
+    very_interesting: 90
+    interesting: 75
+    review: 60
+    rather_uninteresting: 40
+
+# --- Logging -----------------------------------------------------------------
+logging:
+  level: "INFO"
+  format: "console"             # "console" oder "json"

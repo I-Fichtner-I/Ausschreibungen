@@ -1,0 +1,227 @@
+"""Asynchroner HTTP-Client mit Retry, Backoff, Rate-Limit, Cache und robots.txt.
+
+Alle Netzwerkzugriffe des Tools laufen ueber diese Klasse. Dadurch gelten die
+Compliance- und Robustheitsregeln (hoefliches Rate-Limit, robots.txt,
+Wiederholungen mit Exponential Backoff, Timeouts, Logging) an genau einer
+Stelle und nicht verstreut in jedem Adapter.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import random
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
+
+from ..config import HttpConfig
+from .cache import ResponseCache
+from .errors import HttpError, RobotsDisallowedError
+from .logging import get_logger
+from .ratelimit import RateLimiter
+from .robots import RobotsGuard
+
+log = get_logger(__name__)
+
+RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+
+
+@dataclass
+class HttpStats:
+    requests: int = 0
+    cache_hits: int = 0
+    retries: int = 0
+    failures: int = 0
+    bytes_downloaded: int = 0
+    by_host: dict[str, int] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "requests": self.requests,
+            "cache_hits": self.cache_hits,
+            "retries": self.retries,
+            "failures": self.failures,
+            "bytes_downloaded": self.bytes_downloaded,
+            "by_host": dict(self.by_host),
+        }
+
+
+class HttpClient:
+    """Duenne, aber strenge Huelle um ``httpx.AsyncClient``."""
+
+    def __init__(
+        self,
+        config: HttpConfig,
+        *,
+        cache: ResponseCache | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.config = config
+        self.cache = cache
+        self.stats = HttpStats()
+        self.rate_limiter = RateLimiter(config.requests_per_second)
+        self.robots = RobotsGuard(config.user_agent, enabled=config.respect_robots)
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(config.timeout, connect=config.connect_timeout),
+            headers={"User-Agent": config.user_agent, "Accept-Encoding": "gzip, deflate"},
+            follow_redirects=True,
+            transport=transport,
+        )
+
+    # --- Lifecycle ---------------------------------------------------------
+    async def __aenter__(self) -> HttpClient:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    # --- Hooks (in Tests ueberschreibbar) ----------------------------------
+    async def _sleep(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+    # --- Kern --------------------------------------------------------------
+    def configure_host_rate(self, url: str, requests_per_second: float | None) -> None:
+        self.rate_limiter.configure_host(urlsplit(url).netloc, requests_per_second)
+
+    def _backoff_delay(self, attempt: int, retry_after: str | None) -> float:
+        if retry_after:
+            try:
+                return min(float(retry_after), self.config.backoff_max)
+            except ValueError:
+                pass
+        delay = self.config.backoff_base * (2**attempt)
+        delay = min(delay, self.config.backoff_max)
+        return delay * (0.5 + random.random() / 2)  # Jitter gegen Thundering Herd
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        headers: dict[str, str] | None = None,
+        use_cache: bool = True,
+        check_robots: bool | None = None,
+    ) -> httpx.Response:
+        request = self._client.build_request(
+            method.upper(), url, params=params, json=json, headers=headers
+        )
+        full_url = str(request.url)
+        body = request.content or None
+
+        cache_key = ResponseCache.make_key(method, full_url, body)
+        if use_cache and self.cache is not None:
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                self.stats.cache_hits += 1
+                log.debug("http_cache_hit", url=full_url)
+                return httpx.Response(
+                    status_code=cached["status_code"],
+                    content=cached["content"],
+                    headers=cached.get("headers") or {},
+                    request=request,
+                )
+
+        should_check_robots = (
+            self.config.respect_robots if check_robots is None else check_robots
+        )
+        if should_check_robots and not await self.robots.allowed(full_url, self._client):
+            raise RobotsDisallowedError(full_url)
+
+        host = request.url.host or ""
+        crawl_delay = self.robots.crawl_delay(full_url)
+        if crawl_delay:
+            # robots.txt darf strenger sein als unsere eigene Konfiguration
+            self.rate_limiter.configure_host(host, 1.0 / crawl_delay)
+
+        last_error: Exception | None = None
+        for attempt in range(self.config.max_retries + 1):
+            await self.rate_limiter.acquire(host)
+            self.stats.requests += 1
+            self.stats.by_host[host] = self.stats.by_host.get(host, 0) + 1
+            try:
+                response = await self._client.send(request)
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt >= self.config.max_retries:
+                    break
+                delay = self._backoff_delay(attempt, None)
+                self.stats.retries += 1
+                log.warning(
+                    "http_retry", url=full_url, attempt=attempt + 1,
+                    error=str(exc), delay=round(delay, 2),
+                )
+                await self._sleep(delay)
+                request = self._client.build_request(
+                    method.upper(), url, params=params, json=json, headers=headers
+                )
+                continue
+
+            if response.status_code in RETRYABLE_STATUS and attempt < self.config.max_retries:
+                delay = self._backoff_delay(attempt, response.headers.get("Retry-After"))
+                self.stats.retries += 1
+                log.warning(
+                    "http_retry_status", url=full_url, status=response.status_code,
+                    attempt=attempt + 1, delay=round(delay, 2),
+                )
+                await response.aclose()
+                await self._sleep(delay)
+                request = self._client.build_request(
+                    method.upper(), url, params=params, json=json, headers=headers
+                )
+                continue
+
+            await response.aread()
+            self.stats.bytes_downloaded += len(response.content)
+            if use_cache and self.cache is not None and response.status_code < 400:
+                self.cache.set(
+                    cache_key,
+                    status_code=response.status_code,
+                    content=response.content,
+                    headers={"Content-Type": response.headers.get("Content-Type", "")},
+                )
+            if response.status_code >= 400:
+                self.stats.failures += 1
+                raise HttpError(
+                    full_url,
+                    f"HTTP {response.status_code}: {response.text[:200]}",
+                    status_code=response.status_code,
+                )
+            return response
+
+        self.stats.failures += 1
+        raise HttpError(full_url, f"Abruf nach {self.config.max_retries + 1} Versuchen "
+                                  f"fehlgeschlagen: {last_error}")
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response:
+        return await self.request("GET", url, **kwargs)
+
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response:
+        return await self.request("POST", url, **kwargs)
+
+    async def download(self, url: str, destination: Path, **kwargs: Any) -> Path:
+        """Datei herunterladen (Ausschreibungsunterlagen)."""
+        response = await self.request("GET", url, use_cache=False, **kwargs)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(response.content)
+        return destination
+
+
+def build_http_client(
+    config: HttpConfig,
+    cache_dir: Path | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> HttpClient:
+    cache = (
+        ResponseCache(cache_dir, ttl_seconds=config.cache_ttl_seconds, enabled=True)
+        if config.cache_enabled and cache_dir is not None
+        else None
+    )
+    return HttpClient(config, cache=cache, transport=transport)

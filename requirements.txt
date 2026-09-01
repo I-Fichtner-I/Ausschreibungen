@@ -1,0 +1,20 @@
+# Laufzeit-Abhaengigkeiten (Stufe 1: Recherche)
+httpx>=0.27
+pydantic>=2.7
+pydantic-settings>=2.2
+SQLAlchemy>=2.0
+typer>=0.12
+rich>=13.7
+PyYAML>=6.0
+python-dotenv>=1.0
+structlog>=24.1
+feedparser>=6.0
+
+# Optional: Excel-Export
+openpyxl>=3.1
+
+# Entwicklung / Tests
+pytest>=8.0
+pytest-asyncio>=0.23
+respx>=0.21
+anyio>=4.3

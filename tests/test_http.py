@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import httpx
+import pytest
+import respx
+
+from tender_ai.config import HttpConfig
+from tender_ai.core.cache import ResponseCache
+from tender_ai.core.errors import HttpError, RobotsDisallowedError
+from tender_ai.core.http import HttpClient, build_http_client
+from tender_ai.core.ratelimit import RateLimiter
+
+
+def config(**overrides) -> HttpConfig:
+    base = dict(
+        max_retries=2,
+        backoff_base=0.001,
+        backoff_max=0.01,
+        requests_per_second=0,
+        respect_robots=False,
+        cache_enabled=False,
+    )
+    base.update(overrides)
+    return HttpConfig(**base)
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+@respx.mock
+async def test_retries_on_server_error_then_succeeds():
+    route = respx.get("https://api.test.invalid/data").mock(
+        side_effect=[
+            httpx.Response(503),
+            httpx.Response(500),
+            httpx.Response(200, json={"ok": True}),
+        ]
+    )
+    client = HttpClient(config())
+    client._sleep = _no_sleep  # type: ignore[method-assign]
+    try:
+        response = await client.get("https://api.test.invalid/data")
+        assert response.json() == {"ok": True}
+        assert route.call_count == 3
+        assert client.stats.retries == 2
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_gives_up_after_max_retries():
+    respx.get("https://api.test.invalid/down").mock(return_value=httpx.Response(500))
+    client = HttpClient(config(max_retries=1))
+    client._sleep = _no_sleep  # type: ignore[method-assign]
+    try:
+        with pytest.raises(HttpError) as excinfo:
+            await client.get("https://api.test.invalid/down")
+        assert excinfo.value.status_code == 500
+        assert client.stats.failures == 1
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_retry_after_header_is_respected():
+    respx.get("https://api.test.invalid/limited").mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "0.01"}),
+            httpx.Response(200, text="ok"),
+        ]
+    )
+    client = HttpClient(config())
+    delays: list[float] = []
+
+    async def record(seconds: float) -> None:
+        delays.append(seconds)
+
+    client._sleep = record  # type: ignore[method-assign]
+    try:
+        response = await client.get("https://api.test.invalid/limited")
+        assert response.text == "ok"
+        assert delays == [0.01]
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_network_error_is_retried():
+    respx.get("https://api.test.invalid/flaky").mock(
+        side_effect=[httpx.ConnectError("boom"), httpx.Response(200, text="ok")]
+    )
+    client = HttpClient(config())
+    client._sleep = _no_sleep  # type: ignore[method-assign]
+    try:
+        assert (await client.get("https://api.test.invalid/flaky")).text == "ok"
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_robots_disallow_blocks_request():
+    respx.get("https://portal.test.invalid/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nDisallow: /geschuetzt")
+    )
+    page = respx.get("https://portal.test.invalid/geschuetzt/liste")
+    client = HttpClient(config(respect_robots=True))
+    try:
+        with pytest.raises(RobotsDisallowedError):
+            await client.get("https://portal.test.invalid/geschuetzt/liste")
+        assert page.call_count == 0
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_robots_allows_other_paths():
+    respx.get("https://portal.test.invalid/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nDisallow: /geschuetzt")
+    )
+    respx.get("https://portal.test.invalid/offen/liste").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    client = HttpClient(config(respect_robots=True))
+    try:
+        assert (await client.get("https://portal.test.invalid/offen/liste")).text == "ok"
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_missing_robots_txt_allows_request():
+    respx.get("https://portal.test.invalid/robots.txt").mock(return_value=httpx.Response(404))
+    respx.get("https://portal.test.invalid/feed.xml").mock(
+        return_value=httpx.Response(200, text="feed")
+    )
+    client = HttpClient(config(respect_robots=True))
+    try:
+        assert (await client.get("https://portal.test.invalid/feed.xml")).text == "feed"
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_cache_prevents_second_request(tmp_path: Path):
+    route = respx.get("https://api.test.invalid/cached").mock(
+        return_value=httpx.Response(200, json={"value": 1})
+    )
+    client = build_http_client(config(cache_enabled=True, cache_ttl_seconds=60), tmp_path / "cache")
+    try:
+        first = await client.get("https://api.test.invalid/cached")
+        second = await client.get("https://api.test.invalid/cached")
+        assert first.json() == second.json()
+        assert route.call_count == 1
+        assert client.stats.cache_hits == 1
+    finally:
+        await client.aclose()
+
+
+async def test_rate_limiter_enforces_minimum_interval():
+    import time
+
+    limiter = RateLimiter(default_rps=50)  # 20 ms Abstand
+    started = time.monotonic()
+    await limiter.acquire("host")
+    await limiter.acquire("host")
+    assert time.monotonic() - started >= 0.015
+
+
+def test_cache_expires(tmp_path: Path):
+    cache = ResponseCache(tmp_path, ttl_seconds=0)
+    key = ResponseCache.make_key("GET", "https://x.invalid")
+    cache.set(key, status_code=200, content=b"data")
+    assert cache.get(key) is None
