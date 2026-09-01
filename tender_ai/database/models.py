@@ -11,7 +11,7 @@ Das Schema laeuft unveraendert auf SQLite (lokal) und PostgreSQL (produktiv).
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -30,7 +30,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -95,9 +95,7 @@ class TenderRecord(Base):
         back_populates="tender", cascade="all, delete-orphan"
     )
 
-    __table_args__ = (
-        Index("ix_tenders_source_source_id", "source", "source_id", unique=True),
-    )
+    __table_args__ = (Index("ix_tenders_source_source_id", "source", "source_id", unique=True),)
 
 
 class TenderAliasRecord(Base):
@@ -118,9 +116,7 @@ class TenderAliasRecord(Base):
 
     tender: Mapped[TenderRecord] = relationship(back_populates="aliases")
 
-    __table_args__ = (
-        Index("ix_alias_source_source_id", "source", "source_id", unique=True),
-    )
+    __table_args__ = (Index("ix_alias_source_source_id", "source", "source_id", unique=True),)
 
 
 class TenderDocumentRecord(Base):
@@ -185,9 +181,7 @@ class SourceStateRecord(Base):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     type: Mapped[str] = mapped_column(String(64))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    last_success_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     last_error: Mapped[str | None] = mapped_column(Text, default=None)
     last_result_count: Mapped[int] = mapped_column(Integer, default=0)
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)

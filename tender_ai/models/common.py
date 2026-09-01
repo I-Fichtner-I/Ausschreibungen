@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -20,7 +20,7 @@ NOT_AVAILABLE = "NOT_AVAILABLE"
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def display(value: Any, *, missing: str = UNKNOWN) -> str:
@@ -49,12 +49,7 @@ def normalize_text(value: str | None) -> str:
     # Reihenfolge wichtig: erst deutsche Umlaute transkribieren, dann zerlegen -
     # sonst wird aus "ü" ein "u" statt "ue" und Titelvergleiche werden ungenau.
     text = value.casefold()
-    text = (
-        text.replace("ß", "ss")
-        .replace("ä", "ae")
-        .replace("ö", "oe")
-        .replace("ü", "ue")
-    )
+    text = text.replace("ß", "ss").replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = _PUNCT.sub(" ", text)

@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-dev.txt
+
+      - name: Install (aus Lockdatei)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format (ruff)
+        run: ruff format --check .
+
+      - name: Typecheck (mypy)
+        run: mypy tender_ai
+
+      - name: Tests mit Coverage
+        run: pytest -q --cov=tender_ai --cov-report=term-missing --cov-fail-under=80
+
+      - name: Dependency-Audit (pip-audit)
+        # Braucht Netzzugang zu OSV/PyPI; ein Ausfall des Dienstes soll den
+        # Build nicht blockieren - Befunde bleiben im Log sichtbar.
+        continue-on-error: true
+        run: pip-audit -r requirements-dev.txt

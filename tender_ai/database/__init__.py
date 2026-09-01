@@ -9,8 +9,8 @@ from .models import (
     TenderDocumentRecord,
     TenderRecord,
 )
-from .session import create_all, get_engine, session_scope
 from .repository import TenderRepository, UpsertResult
+from .session import create_all, get_engine, session_scope
 
 __all__ = [
     "Base",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -19,7 +19,7 @@ def tenders() -> list[Tender]:
             source_id="1",
             title="Lieferung von 2.000 Monitoren",
             contracting_authority="Musterstadt",
-            submission_deadline=datetime(2036, 9, 15, 10, tzinfo=timezone.utc),
+            submission_deadline=datetime(2036, 9, 15, 10, tzinfo=UTC),
             estimated_value=420000.0,
             currency="EUR",
         ),
@@ -55,7 +55,7 @@ def test_xlsx_export(tmp_path: Path):
     openpyxl = pytest.importorskip("openpyxl")
     path = export_tenders(tenders(), tmp_path / "out.xlsx", "xlsx")
     sheet = openpyxl.load_workbook(path).active
-    assert sheet.max_row == 3          # Kopfzeile + 2 Datensaetze
+    assert sheet.max_row == 3  # Kopfzeile + 2 Datensaetze
     assert sheet.cell(row=1, column=1).value == "id"
 
 

@@ -25,12 +25,28 @@ class RateLimiter:
     def _interval(rps: float) -> float:
         return 1.0 / rps if rps and rps > 0 else 0.0
 
+    def interval_for(self, host: str) -> float:
+        return self._intervals.get(host, self._default_interval)
+
     def configure_host(self, host: str, requests_per_second: float | None) -> None:
+        """Rate-Limit eines Hosts setzen (eigene Konfiguration)."""
         if requests_per_second is not None:
             self._intervals[host] = self._interval(requests_per_second)
 
+    def tighten_host(self, host: str, requests_per_second: float | None) -> None:
+        """Rate-Limit nur verschaerfen, nie lockern.
+
+        Fuer Vorgaben Dritter (robots.txt ``Crawl-delay``): sie duerfen unsere
+        eigene Konfiguration strenger machen, aber nicht aufheben.
+        """
+        if requests_per_second is None:
+            return
+        proposed = self._interval(requests_per_second)
+        if proposed > self.interval_for(host):
+            self._intervals[host] = proposed
+
     async def acquire(self, host: str) -> None:
-        interval = self._intervals.get(host, self._default_interval)
+        interval = self.interval_for(host)
         if interval <= 0:
             return
         async with self._locks[host]:

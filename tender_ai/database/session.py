@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -23,9 +23,7 @@ def get_engine(database_url: str, echo: bool = False) -> Engine:
         path_part = database_url.split("///", 1)[-1]
         if path_part and path_part != ":memory:":
             Path(path_part).parent.mkdir(parents=True, exist_ok=True)
-        engine = create_engine(
-            database_url, echo=echo, connect_args={"check_same_thread": False}
-        )
+        engine = create_engine(database_url, echo=echo, connect_args={"check_same_thread": False})
     else:
         engine = create_engine(database_url, echo=echo, pool_pre_ping=True)
     _engines[database_url] = engine

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -19,7 +19,7 @@ def tender(**overrides) -> Tender:
         contracting_authority="Musterstadt - Zentrale Vergabestelle",
         country="DEU",
         publication_date=date(2026, 8, 25),
-        submission_deadline=datetime(2036, 9, 15, 10, tzinfo=timezone.utc),
+        submission_deadline=datetime(2036, 9, 15, 10, tzinfo=UTC),
         estimated_value=420000.0,
         currency="EUR",
         status=TenderStatus.OPEN,
@@ -56,9 +56,7 @@ def test_unchanged_tender_is_recognised(repository: TenderRepository):
 
 def test_changed_deadline_is_logged(repository: TenderRepository):
     repository.upsert(tender())
-    result = repository.upsert(
-        tender(submission_deadline=datetime(2036, 10, 1, 10, tzinfo=timezone.utc))
-    )
+    result = repository.upsert(tender(submission_deadline=datetime(2036, 10, 1, 10, tzinfo=UTC)))
     assert result.action == "updated"
     changed_fields = {change[0] for change in result.changes}
     assert "submission_deadline" in changed_fields
@@ -80,7 +78,10 @@ def test_duplicate_from_other_source_is_linked(repository: TenderRepository):
     repository.upsert(tender(national_id="VG-2026-1"))
     result = repository.upsert(
         tender(
-            id="feed:9", source="feed", source_id="9", national_id="VG-2026-1",
+            id="feed:9",
+            source="feed",
+            source_id="9",
+            national_id="VG-2026-1",
             title="Anderer Titel derselben Vergabe",
         )
     )
@@ -101,8 +102,8 @@ def test_duplicate_detected_by_similar_title(repository: TenderRepository):
             id="feed:9",
             source="feed",
             source_id="9",
-            title="Lieferung von 2.000 Monitoren",   # identischer Titel + Vergabestelle
-            submission_deadline=datetime(2036, 9, 15, 10, tzinfo=timezone.utc),
+            title="Lieferung von 2.000 Monitoren",  # identischer Titel + Vergabestelle
+            submission_deadline=datetime(2036, 9, 15, 10, tzinfo=UTC),
         )
     )
     assert result.action == "duplicate"
@@ -111,9 +112,7 @@ def test_duplicate_detected_by_similar_title(repository: TenderRepository):
 
 def test_higher_priority_source_becomes_primary(repository: TenderRepository):
     # "feed" (Prioritaet 20) zuerst, dann "ted" (Prioritaet 10) -> ted wird primaer
-    repository.upsert(
-        tender(id="feed:9", source="feed", source_id="9", national_id="VG-2026-1")
-    )
+    repository.upsert(tender(id="feed:9", source="feed", source_id="9", national_id="VG-2026-1"))
     result = repository.upsert(tender(national_id="VG-2026-1"))
     assert result.action == "duplicate"
     assert result.record.is_primary is True
@@ -126,7 +125,9 @@ def test_different_tenders_are_not_merged(repository: TenderRepository):
     repository.upsert(tender())
     result = repository.upsert(
         tender(
-            id="feed:9", source="feed", source_id="9",
+            id="feed:9",
+            source="feed",
+            source_id="9",
             title="Reinigungsdienstleistungen fuer Schulen",
             contracting_authority="Landkreis Beispiel",
         )
@@ -139,9 +140,12 @@ def test_list_filters(repository: TenderRepository):
     repository.upsert(tender())
     repository.upsert(
         tender(
-            id="feed:2", source="feed", source_id="2",
-            title="Wartung von Aufzugsanlagen", contracting_authority="Stadtwerke",
-            submission_deadline=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            id="feed:2",
+            source="feed",
+            source_id="2",
+            title="Wartung von Aufzugsanlagen",
+            contracting_authority="Stadtwerke",
+            submission_deadline=datetime(2020, 1, 1, tzinfo=UTC),
         )
     )
     assert len(repository.list_tenders(open_only=True)) == 1

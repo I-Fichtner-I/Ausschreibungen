@@ -68,8 +68,8 @@ async def test_feed_entries_are_mapped(settings: Settings, http_client: HttpClie
     assert "Angebotsfrist: 15.10.2036" in first.provenance.original_text
 
     second = results[1]
-    assert second.description == "Wartung von 34 Anlagen"   # HTML entfernt
-    assert second.submission_deadline is None               # keine Frist im Text
+    assert second.description == "Wartung von 34 Anlagen"  # HTML entfernt
+    assert second.submission_deadline is None  # keine Frist im Text
     assert second.notes == []
 
 
@@ -145,3 +145,42 @@ async def test_robots_disallow_skips_feed(settings: Settings, http_client: HttpC
     with pytest.raises(SourceError, match="robots.txt"):
         await source.search(SearchQuery(max_results=10))
     assert feed_route.call_count == 0
+
+
+# --- T-03: Fristarten getrennt --------------------------------------------------
+@pytest.mark.parametrize(
+    ("text", "submission", "binding", "delivery"),
+    [
+        ("Bindefrist: 01.12.2026", None, "2026-12-01", None),
+        ("Lieferfrist: 30.11.2026", None, None, "2026-11-30"),
+        ("Angebotsfrist: 15.10.2036", "2036-10-15", None, None),
+        (
+            "Angebotsfrist 15.10.2036, Bindefrist bis 01.12.2036, Lieferfrist: 15.01.2037",
+            "2036-10-15",
+            "2036-12-01",
+            "2037-01-15",
+        ),
+        ("Frist: 01.01.2030", None, None, None),  # generisches "Frist" wird nicht geraten
+    ],
+)
+def test_deadline_kinds_are_separated(text, submission, binding, delivery):
+    found = RssSource._extract_dates(None, text)
+    got = {kind: value[0].isoformat() for kind, value in found.items()}
+    assert got.get("submission") == submission
+    assert got.get("binding") == binding
+    assert got.get("delivery") == delivery
+
+
+@respx.mock
+async def test_binding_and_delivery_land_in_own_fields(settings: Settings, http_client: HttpClient):
+    xml = FEED_XML.replace(
+        "Rahmenvertrag ueber Bueromoebel. Angebotsfrist: 15.10.2036",
+        "Bindefrist: 01.12.2036, Lieferfrist: 15.01.2037",
+    )
+    respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=xml))
+    first = (await build_source(settings, http_client).search(SearchQuery(max_results=10)))[0]
+    assert first.submission_deadline is None
+    assert first.binding_period_end.isoformat() == "2036-12-01"
+    assert first.delivery_deadline.isoformat() == "2037-01-15"
+    assert first.notes and "Bindefrist" in first.notes[0] and "Lieferfrist" in first.notes[0]
+    assert first.provenance.original_text is None

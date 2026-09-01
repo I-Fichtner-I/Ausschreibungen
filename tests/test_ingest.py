@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import httpx
 import pytest
@@ -70,7 +70,7 @@ async def test_full_run_stores_results(settings: Settings, http_client: HttpClie
         service = IngestService(settings, sources, http_client, session=session)
         report = await service.run(SearchQuery(max_results=10))
 
-        assert report.found == 4          # 1 TED + 1 Feed + 2 Fixture
+        assert report.found == 4  # 1 TED + 1 Feed + 2 Fixture
         assert report.new + report.duplicates == 4
         assert report.errors == []
         repository = TenderRepository(session, settings.dedup)
@@ -87,7 +87,9 @@ async def test_broken_source_does_not_stop_run(settings: Settings, http_client: 
         sources = build_sources(settings, http_client)
         sources.append(
             BrokenSource(
-                name="broken", config=settings.sources["fixture"], http=http_client,
+                name="broken",
+                config=settings.sources["fixture"],
+                http=http_client,
                 settings=settings,
             )
         )
@@ -147,11 +149,13 @@ async def test_search_query_from_config(settings: Settings):
 
 def test_query_matches_is_tolerant_about_missing_fields():
     query = SearchQuery(
-        keywords=["monitor"], countries=["DEU"], published_after=date(2026, 1, 1),
-        deadline_after=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        keywords=["monitor"],
+        countries=["DEU"],
+        published_after=date(2026, 1, 1),
+        deadline_after=datetime(2026, 9, 1, tzinfo=UTC),
     )
     tender = Tender(id="x:1", source="x", source_id="1", title="Monitor-Lieferung")
-    assert query.matches(tender) is True          # fehlende Angaben schliessen nicht aus
+    assert query.matches(tender) is True  # fehlende Angaben schliessen nicht aus
 
     other_country = Tender(
         id="x:2", source="x", source_id="2", title="Monitor-Lieferung", country="FRA"
@@ -160,3 +164,42 @@ def test_query_matches_is_tolerant_about_missing_fields():
 
     wrong_topic = Tender(id="x:3", source="x", source_id="3", title="Strassenbau")
     assert query.matches(wrong_topic) is False
+
+
+# --- T-01: ein defekter Datensatz kostet nur sich selbst ------------------------
+class ThreeSource(TenderSource):
+    type_name = "three"
+
+    async def search(self, query: SearchQuery) -> list[Tender]:
+        return [
+            Tender(id="three:ok", source="three", source_id="ok", title="OK"),
+            Tender(id="three:bad", source="three", source_id="bad", title="BAD"),
+            Tender(id="three:ok2", source="three", source_id="ok2", title="OK2"),
+        ]
+
+
+async def test_failed_upsert_keeps_other_records(settings: Settings, http_client: HttpClient):
+    with session_scope(settings.database_url) as session:
+        source = ThreeSource("three", settings.sources["fixture"], http_client, settings)
+        service = IngestService(settings, [source], http_client, session=session)
+        original = service.repository.upsert
+
+        def flaky(tender: Tender):
+            if tender.source_id == "bad":
+                raise RuntimeError("simulierter Persistenzfehler")
+            return original(tender)
+
+        service.repository.upsert = flaky  # type: ignore[method-assign]
+        report = await service.run(SearchQuery(max_results=10))
+
+        assert report.new == 2
+        assert report.failed == 1
+        assert report.sources[0].failed_ids == ["three:bad"]
+        assert [e["tender_id"] for e in report.errors] == ["three:bad"]
+        repository = TenderRepository(session, settings.dedup)
+        assert {r.id for r in repository.list_tenders(only_primary=False)} == {
+            "three:ok",
+            "three:ok2",
+        }
+        run = repository.last_runs(1)[0]
+        assert run.new == 2 and any(e.get("tender_id") == "three:bad" for e in run.errors)

@@ -9,7 +9,7 @@ Neue Quelle hinzufuegen:
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from ..config import Settings
 from ..core.http import HttpClient
@@ -69,7 +69,7 @@ def build_sources(
             continue
         try:
             source = cls(name=name, config=config, http=http, settings=settings)
-        except Exception as exc:  # eine kaputte Quelle darf den Lauf nicht stoppen
+        except Exception as exc:  # noqa: BLE001 - eine kaputte Quelle darf den Lauf nicht stoppen
             log.error("source_init_failed", source=name, error=str(exc))
             continue
         sources.append(source)

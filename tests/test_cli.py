@@ -64,7 +64,7 @@ def test_doctor_reports_failing_source(settings: Settings):
     statuses = {entry["name"]: entry for entry in json.loads(result.stdout)}
     assert statuses["fixture"]["ok"] is True
     assert statuses["ted"]["ok"] is False
-    assert result.exit_code == 1        # mindestens eine Quelle defekt
+    assert result.exit_code == 1  # mindestens eine Quelle defekt
 
 
 def test_show_and_export(settings: Settings, tmp_path: Path):
