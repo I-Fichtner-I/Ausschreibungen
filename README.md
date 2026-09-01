@@ -199,3 +199,12 @@ config.yaml  .env.example  docs/architecture.md
 Naechste Stufe: **Ausschreibungen analysieren** - Detailseiten und Unterlagen
 laden, PDF/DOCX/XLSX auswerten, Anforderungen und Risiken erkennen.
 Details in [docs/architecture.md](docs/architecture.md).
+
+## Review und Roadmap
+
+- [docs/ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md) - evidenzbasierte
+  Bestandsaufnahme von Stufe 1 (Findings mit Belegen, Messungen, Diskrepanzen
+  zwischen Dokumentation und Code)
+- [docs/OPTIMIZATION_ROADMAP.md](docs/OPTIMIZATION_ROADMAP.md) - priorisierte,
+  direkt umsetzbare Tasks mit Akzeptanzkriterien und empfohlener Reihenfolge;
+  Wellen 0-3 sind das Gate vor Beginn von Stufe 2
