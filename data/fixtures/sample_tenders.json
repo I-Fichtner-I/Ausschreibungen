@@ -1,0 +1,65 @@
+{
+  "_comment": "Beispieldaten fuer Offline-Tests und Demo. Frei erfunden - keine echten Ausschreibungen.",
+  "tenders": [
+    {
+      "source_id": "demo-2026-0001",
+      "national_id": "VG-2026-0001",
+      "title": "Lieferung von 2.000 Monitoren fuer Verwaltungsarbeitsplaetze",
+      "contracting_authority": "Musterstadt - Zentrale Vergabestelle",
+      "description": "Beschaffung von 2.000 LED-Monitoren, 27 Zoll, IPS-Panel, hoehenverstellbar, inklusive Lieferung an 12 Standorte.",
+      "country": "DEU",
+      "region": "Bayern",
+      "delivery_location": "Musterstadt",
+      "cpv_codes": ["30231300"],
+      "notice_type": "cn-standard",
+      "procedure_type": "open",
+      "publication_date": "2026-08-25",
+      "submission_deadline": "2026-09-15T12:00:00+02:00",
+      "estimated_value": 420000.0,
+      "currency": "EUR",
+      "status": "OPEN",
+      "source_url": "https://example.invalid/ausschreibungen/demo-2026-0001",
+      "documents": [
+        {
+          "name": "Leistungsverzeichnis",
+          "url": "https://example.invalid/ausschreibungen/demo-2026-0001/lv.pdf",
+          "media_type": "application/pdf",
+          "access": "PUBLIC"
+        }
+      ]
+    },
+    {
+      "source_id": "demo-2026-0002",
+      "national_id": "VG-2026-0002",
+      "title": "Rahmenvertrag Bueroausstattung - Lose 1 bis 3",
+      "contracting_authority": "Landkreis Beispiel",
+      "description": "Rahmenvereinbarung ueber die Lieferung von Bueromoebeln und Bueromaterial, Laufzeit 24 Monate.",
+      "country": "DEU",
+      "region": "Niedersachsen",
+      "cpv_codes": ["30190000", "39130000"],
+      "publication_date": "2026-08-28",
+      "submission_deadline": "2026-10-02T10:00:00+02:00",
+      "estimated_value": 180000.0,
+      "currency": "EUR",
+      "status": "OPEN",
+      "source_url": "https://example.invalid/ausschreibungen/demo-2026-0002",
+      "lots": [
+        {"lot_id": "1", "title": "Bueromoebel", "estimated_value": 90000.0, "currency": "EUR"},
+        {"lot_id": "2", "title": "Bueromaterial", "estimated_value": 60000.0, "currency": "EUR"},
+        {"lot_id": "3", "title": "Ergonomiezubehoer", "estimated_value": 30000.0, "currency": "EUR"}
+      ]
+    },
+    {
+      "source_id": "demo-2026-0003",
+      "title": "Wartung von Aufzugsanlagen",
+      "contracting_authority": "Stadtwerke Beispielstadt GmbH",
+      "description": "Dienstleistung: Wartung und Instandhaltung von 34 Aufzugsanlagen.",
+      "country": "DEU",
+      "cpv_codes": ["50750000"],
+      "publication_date": "2026-08-20",
+      "submission_deadline": "2026-09-04T09:00:00+02:00",
+      "status": "OPEN",
+      "source_url": "https://example.invalid/ausschreibungen/demo-2026-0003"
+    }
+  ]
+}
