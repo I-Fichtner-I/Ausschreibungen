@@ -174,3 +174,53 @@ def test_cache_expires(tmp_path: Path):
     key = ResponseCache.make_key("GET", "https://x.invalid")
     cache.set(key, status_code=200, content=b"data")
     assert cache.get(key) is None
+
+
+# --- T-08: Crawl-delay nur verschaerfend, robots.txt ueber Request-Pfad ---------
+@respx.mock
+async def test_crawl_delay_only_tightens_rate_limit():
+    respx.get("https://portal.test.invalid/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nCrawl-delay: 1\n")
+    )
+    respx.get("https://portal.test.invalid/feed.xml").mock(
+        return_value=httpx.Response(200, text="ok")
+    )
+    client = HttpClient(config(respect_robots=True))
+    try:
+        # Quelle ist strenger (0,5 req/s = 2 s) als Crawl-delay 1 s -> bleibt 2 s
+        client.configure_host_rate("https://portal.test.invalid/", 0.5)
+        await client.get("https://portal.test.invalid/feed.xml")
+        assert client.rate_limiter.interval_for("portal.test.invalid") == 2.0
+        # Quelle ist lockerer (2 req/s = 0,5 s) -> Crawl-delay verschaerft auf 1 s
+        client.rate_limiter.configure_host("portal.test.invalid", 2.0)
+        await client.get("https://portal.test.invalid/feed.xml")
+        assert client.rate_limiter.interval_for("portal.test.invalid") == 1.0
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_robots_fetch_goes_through_request_path():
+    respx.get("https://portal.test.invalid/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nAllow: /")
+    )
+    respx.get("https://portal.test.invalid/x").mock(return_value=httpx.Response(200, text="ok"))
+    client = HttpClient(config(respect_robots=True))
+    try:
+        await client.get("https://portal.test.invalid/x")
+        # robots.txt + eigentlicher Abruf werden beide gezaehlt
+        assert client.stats.requests == 2
+        assert client.stats.by_host["portal.test.invalid"] == 2
+    finally:
+        await client.aclose()
+
+
+def test_tighten_host_never_loosens():
+    limiter = RateLimiter(default_rps=1.0)
+    limiter.configure_host("h", 0.5)  # 2 s
+    limiter.tighten_host("h", 4.0)  # 0,25 s -> ignoriert
+    assert limiter.interval_for("h") == 2.0
+    limiter.tighten_host("h", 0.25)  # 4 s -> uebernommen
+    assert limiter.interval_for("h") == 4.0
+    limiter.tighten_host("h", None)
+    assert limiter.interval_for("h") == 4.0

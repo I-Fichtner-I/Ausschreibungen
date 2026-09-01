@@ -8,7 +8,8 @@ Prioritaet (hoechste zuerst):
 5. Defaults im Code
 
 Secrets stehen ausschliesslich in .env bzw. in der Umgebung, niemals in
-config.yaml oder im Quellcode.
+config.yaml oder im Quellcode. Sie werden als ``SecretStr`` gehalten, damit
+sie in ``repr``, Logs und Tracebacks maskiert bleiben.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -115,7 +116,9 @@ class _YamlSettingsSource(PydanticBaseSettingsSource):
                 raise ValueError(f"{path} enthaelt kein YAML-Mapping")
             self._data = loaded
 
-    def get_field_value(self, field: Any, field_name: str) -> tuple[Any, str, bool]:  # pragma: no cover
+    def get_field_value(
+        self, field: Any, field_name: str
+    ) -> tuple[Any, str, bool]:  # pragma: no cover
         value = self._data.get(field_name)
         return value, field_name, False
 
@@ -144,8 +147,13 @@ class Settings(BaseSettings):
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
-    # --- Secrets (nur aus Umgebung/.env) ---
-    ted_api_key: str | None = None
+    # --- Secrets (nur aus Umgebung/.env, nie aus config.yaml) ---
+    #: API-Schluessel je Quelle, Schluessel = Quellname aus config.yaml.
+    #: Umgebung: TENDER_AI_SOURCE_API_KEYS__<name>=... (oder als JSON-Objekt in
+    #: TENDER_AI_SOURCE_API_KEYS).
+    source_api_keys: dict[str, SecretStr] = Field(default_factory=dict)
+    #: Abwaertskompatibel: TENDER_AI_TED_API_KEY.
+    ted_api_key: SecretStr | None = None
 
     @classmethod
     def settings_customise_sources(
@@ -156,9 +164,7 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        config_path = Path(
-            os.environ.get("TENDER_AI_CONFIG_FILE", str(DEFAULT_CONFIG_FILE))
-        )
+        config_path = Path(os.environ.get("TENDER_AI_CONFIG_FILE", str(DEFAULT_CONFIG_FILE)))
         return (
             init_settings,
             env_settings,
@@ -187,11 +193,19 @@ class Settings(BaseSettings):
     def enabled_sources(self) -> dict[str, SourceConfig]:
         return {name: cfg for name, cfg in self.sources.items() if cfg.enabled}
 
-    def secret_for_source(self, source_name: str) -> str | None:
-        """API-Key einer Quelle aus der Umgebung, ohne ihn in config.yaml zu halten."""
-        if source_name == "ted":
-            return self.ted_api_key or None
-        return os.environ.get(f"TENDER_AI_{source_name.upper()}_API_KEY") or None
+    def secret_for_source(self, source_name: str) -> SecretStr | None:
+        """API-Key einer Quelle - ausschliesslich aus Umgebung/.env.
+
+        Reihenfolge: ``source_api_keys[<name>]`` (Gross-/Kleinschreibung egal),
+        danach fuer ``ted`` das Legacy-Feld ``ted_api_key``.
+        """
+        wanted = source_name.lower()
+        for name, key in self.source_api_keys.items():
+            if name.lower() == wanted and key.get_secret_value():
+                return key
+        if wanted == "ted" and self.ted_api_key and self.ted_api_key.get_secret_value():
+            return self.ted_api_key
+        return None
 
 
 @lru_cache(maxsize=1)

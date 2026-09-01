@@ -49,7 +49,7 @@ def sample_tender_file(tmp_path: Path) -> Path:
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sample_tender_file: Path) -> Settings:
     config = {
         "http": {
-            "requests_per_second": 0,       # Tests sollen nicht warten
+            "requests_per_second": 0,  # Tests sollen nicht warten
             "cache_enabled": False,
             "respect_robots": False,
             "max_retries": 2,

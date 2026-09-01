@@ -91,7 +91,8 @@ deaktiviert ist - praktisch fuer die Offline-Fixture.
 - **`config.yaml`** - Quellen, Suchvorgaben, HTTP-Verhalten, Dubletten,
   Mindestkriterien, Score-Schwellen. Keine Secrets.
 - **`.env`** - ausschliesslich Secrets und Umgebungsspezifisches
-  (`TENDER_AI_TED_API_KEY`, `TENDER_AI_DATABASE_URL`, ...).
+  (`TENDER_AI_SOURCE_API_KEYS__<QUELLE>`, `TENDER_AI_DATABASE_URL`, ...).
+  API-Schluessel werden als `SecretStr` gehalten und in Logs maskiert.
 
 Reihenfolge: Umgebungsvariablen (`TENDER_AI_`, verschachtelt mit `__`) schlagen
 `.env`, `.env` schlaegt `config.yaml`.
@@ -134,10 +135,30 @@ protokolliert Aenderungen (Frist, Volumen, Status, Dokumente) in
 
 ---
 
+## Abhaengigkeiten und CI
+
+`pyproject.toml` ist die einzige Quelle der Abhaengigkeiten (mit
+Major-Obergrenzen). Die Lockdatei `uv.lock` und die daraus exportierten
+`requirements.txt` / `requirements-dev.txt` werden **nicht von Hand** gepflegt:
+
+```bash
+uv lock
+uv export --format requirements-txt --no-hashes --no-emit-project --no-dev -o requirements.txt
+uv export --format requirements-txt --no-hashes --no-emit-project --extra dev --extra excel -o requirements-dev.txt
+```
+
+Die CI (`.github/workflows/ci.yml`) laeuft auf jedem PR mit Python 3.12 und
+3.13: `ruff check`, `ruff format --check`, `mypy tender_ai`, `pytest` mit
+Coverage-Schwelle und `pip-audit`. Lokal dasselbe:
+
+```bash
+ruff check . && ruff format --check . && mypy tender_ai && pytest -q --cov=tender_ai
+```
+
 ## Tests
 
 ```bash
-pytest -q            # 74 Tests, laufen offline in wenigen Sekunden
+pytest -q            # laeuft offline in wenigen Sekunden
 ```
 
 Die Adaptertests arbeiten gegen aufgezeichnete HTTP-Antworten (`respx`), nicht
@@ -192,7 +213,7 @@ tender_ai/
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
 ├── database/              SQLAlchemy-Modelle, Session, Repository
 └── export/                JSON / CSV / XLSX
-tests/                     74 Tests
+tests/                     Offline-Tests (respx-Mocks)
 config.yaml  .env.example  docs/architecture.md
 ```
 

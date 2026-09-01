@@ -8,6 +8,25 @@ die konkrete Aenderung, Tests und messbare Akzeptanzkriterien. Kein Task
 aendert Fachlogik ueber das Beschriebene hinaus. Geschaetzter Aufwand:
 S = < 2 h, M = halber Tag, L = 1-2 Tage.
 
+## Umsetzungsstand
+
+| Welle | Tasks | Status |
+|---|---|---|
+| 0 | T-12 CI, T-13 ruff, T-16 Lockdatei, T-14 mypy (vorgezogen) | **erledigt** |
+| 1 | T-01, T-02, T-03, T-04, T-05, T-08 | **erledigt** |
+| 2 | T-07 TED-Status | **erledigt** (vorgezogen, gleiche Datei wie T-04/T-05) |
+| 2 | T-26, T-11, T-09, T-06 | offen |
+| 3 | T-10, T-24 (Coverage-Schwelle steht auf 80 %, Ist 91 %) | offen |
+| 4-5 | T-22, T-15, T-23, T-18, T-17, T-19, T-21, T-25, T-20, T-27 | offen |
+
+Nachweise der erledigten Tasks: `.github/workflows/ci.yml`, `uv.lock`,
+`requirements*.txt`, Tests `test_ingest.py::test_failed_upsert_keeps_other_records`
+(T-01), `test_parsing.py::test_parse_amount_table` (T-02),
+`test_source_rss.py::test_deadline_kinds_are_separated` (T-03),
+`test_config.py` (T-04), `test_paths.py` (T-05),
+`test_source_ted.py::test_status_is_derived_from_notice_type` (T-07),
+`test_http.py::test_crawl_delay_only_tightens_rate_limit` (T-08).
+
 ---
 
 ## D. Priorisierte Roadmap

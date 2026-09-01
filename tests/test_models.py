@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from tender_ai.models.common import NOT_AVAILABLE, UNKNOWN, display, normalize_text
 from tender_ai.models.tender import Tender, TenderDocument, TenderStatus
@@ -13,7 +13,7 @@ def make_tender(**overrides) -> Tender:
         source_id="1",
         title="Lieferung von 2.000 Monitoren",
         contracting_authority="Musterstadt - Zentrale Vergabestelle",
-        submission_deadline=datetime(2036, 9, 15, 12, tzinfo=timezone.utc),
+        submission_deadline=datetime(2036, 9, 15, 12, tzinfo=UTC),
     )
     base.update(overrides)
     return Tender(**base)
@@ -40,9 +40,9 @@ def test_naive_deadline_is_treated_as_utc():
 
 
 def test_days_until_deadline_and_expiry():
-    past = datetime.now(timezone.utc) - timedelta(days=5)
+    past = datetime.now(UTC) - timedelta(days=5)
     assert make_tender(submission_deadline=past).is_expired is True
-    future = datetime.now(timezone.utc) + timedelta(days=10)
+    future = datetime.now(UTC) + timedelta(days=10)
     assert make_tender(submission_deadline=future).days_until_deadline in (9, 10)
     assert make_tender(submission_deadline=None).days_until_deadline is None
 
@@ -66,7 +66,7 @@ def test_fingerprint_falls_back_to_title_authority_deadline():
 def test_content_hash_reacts_to_relevant_changes():
     tender = make_tender()
     before = tender.content_hash()
-    tender.submission_deadline = datetime(2036, 10, 1, tzinfo=timezone.utc)
+    tender.submission_deadline = datetime(2036, 10, 1, tzinfo=UTC)
     assert tender.content_hash() != before
 
     tender2 = make_tender()

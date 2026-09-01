@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timezone
+from datetime import UTC, date
 
 from tender_ai.sources.parsing import (
     all_texts,
@@ -42,7 +42,7 @@ def test_parse_datetime_is_timezone_aware():
     parsed = parse_datetime("2026-09-15T12:00:00+02:00")
     assert parsed is not None and parsed.tzinfo is not None
     naive = parse_datetime("2026-09-15")
-    assert naive is not None and naive.tzinfo == timezone.utc
+    assert naive is not None and naive.tzinfo == UTC
 
 
 def test_parse_amount_and_currency():
@@ -57,3 +57,40 @@ def test_parse_amount_and_currency():
 def test_strip_html():
     assert strip_html("<p>Hallo <b>Welt</b></p>") == "Hallo Welt"
     assert strip_html(None) is None
+
+
+# --- T-02: Betraege locale-bewusst ------------------------------------------------
+import pytest  # noqa: E402
+
+from tender_ai.sources.parsing import parse_amount_with_confidence  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1234.50", 1234.5),
+        ("1,234.50", 1234.5),
+        ("1.234,50", 1234.5),
+        ("1.234.567", 1234567.0),
+        ("1 234 567,89", 1234567.89),
+        ("EUR 420000", 420000.0),
+        ("420.000 EUR", 420000.0),
+        ({"amount": 1234.5}, 1234.5),
+        ({"amount": "1234.50"}, 1234.5),
+        ("abc", None),
+        ("12,5 %", 12.5),
+        ("-1.234,50", -1234.5),
+        (None, None),
+        (True, None),
+    ],
+)
+def test_parse_amount_table(value, expected):
+    assert parse_amount(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "confidence"),
+    [("1.234", 60), ("1.234,50", 100), ("1234.50", 100), ("1.234.567", 100), ("abc", 0)],
+)
+def test_parse_amount_confidence(value, confidence):
+    assert parse_amount_with_confidence(value)[1] == confidence

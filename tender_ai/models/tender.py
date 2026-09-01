@@ -9,7 +9,7 @@ zurueckgefuehrt werden kann.
 from __future__ import annotations
 
 import hashlib
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -28,9 +28,9 @@ class TenderStatus(StrEnum):
 
 
 class DocumentAccess(StrEnum):
-    PUBLIC = "PUBLIC"                 # frei abrufbar
-    REGISTRATION = "REGISTRATION"     # Login/Registrierung noetig -> nicht automatisiert
-    RESTRICTED = "RESTRICTED"         # sonstige Schranke
+    PUBLIC = "PUBLIC"  # frei abrufbar
+    REGISTRATION = "REGISTRATION"  # Login/Registrierung noetig -> nicht automatisiert
+    RESTRICTED = "RESTRICTED"  # sonstige Schranke
     UNKNOWN = "UNKNOWN"
 
 
@@ -144,7 +144,7 @@ class Tender(BaseModel):
     @classmethod
     def _ensure_tz(cls, value: datetime | None) -> datetime | None:
         if value is not None and value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
 
     # --- abgeleitete Werte ---
@@ -152,7 +152,7 @@ class Tender(BaseModel):
     def days_until_deadline(self) -> int | None:
         if self.submission_deadline is None:
             return None
-        delta = self.submission_deadline - datetime.now(timezone.utc)
+        delta = self.submission_deadline - datetime.now(UTC)
         return delta.days
 
     @property
@@ -168,9 +168,7 @@ class Tender(BaseModel):
         Entscheidung trifft ``tender_ai.pipeline.dedup``.
         """
         if self.national_id:
-            return hashlib.sha256(
-                f"nid:{normalize_text(self.national_id)}".encode()
-            ).hexdigest()
+            return hashlib.sha256(f"nid:{normalize_text(self.national_id)}".encode()).hexdigest()
         parts = [
             normalize_text(self.title),
             normalize_text(self.contracting_authority),

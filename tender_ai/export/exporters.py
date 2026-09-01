@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from ..models.common import UNKNOWN, display
 from ..models.tender import Tender
@@ -70,9 +71,7 @@ def tender_rows(tenders: Iterable[Tender]) -> list[dict[str, Any]]:
     return rows
 
 
-def export_tenders(
-    tenders: Sequence[Tender], destination: Path, fmt: str = "json"
-) -> Path:
+def export_tenders(tenders: Sequence[Tender], destination: Path, fmt: str = "json") -> Path:
     fmt = fmt.lower()
     if fmt not in EXPORT_FORMATS:
         raise ValueError(f"Unbekanntes Format '{fmt}'. Erlaubt: {', '.join(EXPORT_FORMATS)}")
@@ -84,9 +83,7 @@ def export_tenders(
             "missing_value_marker": UNKNOWN,
             "tenders": [tender.model_dump(mode="json") for tender in tenders],
         }
-        destination.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return destination
 
     rows = tender_rows(tenders)
@@ -101,9 +98,7 @@ def export_tenders(
     try:
         from openpyxl import Workbook
     except ImportError as exc:  # pragma: no cover - optionale Abhaengigkeit
-        raise RuntimeError(
-            "Excel-Export benoetigt openpyxl: pip install openpyxl"
-        ) from exc
+        raise RuntimeError("Excel-Export benoetigt openpyxl: pip install openpyxl") from exc
 
     workbook = Workbook()
     sheet = workbook.active
@@ -112,7 +107,9 @@ def export_tenders(
     for row in rows:
         sheet.append([row.get(column, UNKNOWN) for column in COLUMNS])
     for index, column in enumerate(COLUMNS, start=1):
-        width = max(12, min(60, max((len(str(row.get(column, ""))) for row in rows), default=12) + 2))
+        width = max(
+            12, min(60, max((len(str(row.get(column, ""))) for row in rows), default=12) + 2)
+        )
         sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = width
     sheet.freeze_panes = "A2"
     workbook.save(destination)

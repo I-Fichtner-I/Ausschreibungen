@@ -1,23 +1,23 @@
 """Kommandozeile von tender-ai (Stufe 1: Recherche).
 
-    tender-ai init                 Verzeichnisse und Datenbank anlegen
-    tender-ai sources              konfigurierte Quellen anzeigen
-    tender-ai doctor               Quellen auf Erreichbarkeit pruefen
-    tender-ai search               Ausschreibungen recherchieren (live)
-    tender-ai list                 gespeicherte Ausschreibungen anzeigen
-    tender-ai show <id>            Details einer Ausschreibung
-    tender-ai export               Ergebnisse als JSON/CSV/XLSX ausgeben
-    tender-ai runs                 letzte Rechercherlaeufe
-    tender-ai cache-clear          HTTP-Cache leeren
+tender-ai init                 Verzeichnisse und Datenbank anlegen
+tender-ai sources              konfigurierte Quellen anzeigen
+tender-ai doctor               Quellen auf Erreichbarkeit pruefen
+tender-ai search               Ausschreibungen recherchieren (live)
+tender-ai list                 gespeicherte Ausschreibungen anzeigen
+tender-ai show <id>            Details einer Ausschreibung
+tender-ai export               Ergebnisse als JSON/CSV/XLSX ausgeben
+tender-ai runs                 letzte Rechercherlaeufe
+tender-ai cache-clear          HTTP-Cache leeren
 """
 
 from __future__ import annotations
 
 import asyncio
 import json as jsonlib
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -45,7 +45,7 @@ log = get_logger(__name__)
 
 
 # --- Hilfsfunktionen ---------------------------------------------------------
-def _settings(config: Optional[Path] = None) -> Settings:
+def _settings(config: Path | None = None) -> Settings:
     settings = load_settings(config) if config else load_settings()
     configure_logging(settings.logging.level, settings.logging.format)
     settings.ensure_directories()
@@ -69,12 +69,10 @@ def _query_from_options(
     if countries:
         query.countries = list(countries)
     if days is not None:
-        query.published_after = date.today() - timedelta(days=days)
+        query.published_after = datetime.now(UTC).date() - timedelta(days=days)
     if min_deadline_days is not None:
         query.deadline_after = (
-            datetime.now(timezone.utc) + timedelta(days=min_deadline_days)
-            if min_deadline_days > 0
-            else None
+            datetime.now(UTC) + timedelta(days=min_deadline_days) if min_deadline_days > 0 else None
         )
     if limit is not None:
         query.max_results = limit
@@ -122,8 +120,10 @@ def _print_source_reports(report: Any) -> None:
     table.add_column("Neu", justify="right")
     table.add_column("Aktualisiert", justify="right")
     table.add_column("Dubletten", justify="right")
+    table.add_column("Fehlgeschlagen", justify="right")
     table.add_column("Dauer (s)", justify="right")
     for source_report in report.sources:
+        failed = str(source_report.failed)
         table.add_row(
             source_report.name,
             source_report.type,
@@ -132,16 +132,20 @@ def _print_source_reports(report: Any) -> None:
             str(source_report.new),
             str(source_report.updated),
             str(source_report.duplicates),
+            f"[red]{failed}[/red]" if source_report.failed else failed,
             f"{source_report.duration_seconds:.2f}",
         )
     console.print(table)
     for error in report.errors:
-        console.print(f"[red]Fehler in Quelle '{error['source']}':[/red] {error['error']}")
+        where = error["source"]
+        if error.get("tender_id"):
+            where = f"{where}, Datensatz {error['tender_id']}"
+        console.print(f"[red]Fehler in Quelle '{where}':[/red] {error['error']}")
 
 
 # --- Kommandos ---------------------------------------------------------------
 @app.command()
-def init(config: Optional[Path] = typer.Option(None, "--config", help="Pfad zu config.yaml")) -> None:
+def init(config: Path | None = typer.Option(None, "--config", help="Pfad zu config.yaml")) -> None:
     """Verzeichnisse anlegen, Datenbankschema erzeugen, Konfiguration pruefen."""
     settings = _settings(config)
     create_all(settings.database_url)
@@ -162,7 +166,7 @@ def init(config: Optional[Path] = typer.Option(None, "--config", help="Pfad zu c
 
 
 @app.command()
-def sources(config: Optional[Path] = typer.Option(None, "--config")) -> None:
+def sources(config: Path | None = typer.Option(None, "--config")) -> None:
     """Konfigurierte Quellen anzeigen."""
     settings = _settings(config)
     table = Table(title="Konfigurierte Quellen", header_style="bold")
@@ -171,9 +175,7 @@ def sources(config: Optional[Path] = typer.Option(None, "--config")) -> None:
     table.add_column("Aktiv")
     table.add_column("Prioritaet", justify="right")
     table.add_column("Rate (req/s)", justify="right")
-    for name, source_config in sorted(
-        settings.sources.items(), key=lambda item: item[1].priority
-    ):
+    for name, source_config in sorted(settings.sources.items(), key=lambda item: item[1].priority):
         table.add_row(
             name,
             source_config.type,
@@ -187,8 +189,8 @@ def sources(config: Optional[Path] = typer.Option(None, "--config")) -> None:
 
 @app.command()
 def doctor(
-    config: Optional[Path] = typer.Option(None, "--config"),
-    source: Optional[list[str]] = typer.Option(None, "--source", "-s", help="nur diese Quelle(n)"),
+    config: Path | None = typer.Option(None, "--config"),
+    source: list[str] | None = typer.Option(None, "--source", "-s", help="nur diese Quelle(n)"),
     json_output: bool = typer.Option(False, "--json", help="Ergebnis als JSON ausgeben"),
 ) -> None:
     """Erreichbarkeit und Parsing der Quellen pruefen (Probeabruf)."""
@@ -234,22 +236,28 @@ def doctor(
 
 @app.command()
 def search(
-    config: Optional[Path] = typer.Option(None, "--config"),
-    keyword: Optional[list[str]] = typer.Option(None, "--keyword", "-k", help="Suchbegriff (mehrfach moeglich)"),
-    cpv: Optional[list[str]] = typer.Option(None, "--cpv", help="CPV-Code (mehrfach moeglich)"),
-    country: Optional[list[str]] = typer.Option(None, "--country", help="Land, ISO-3 (z. B. DEU)"),
-    source: Optional[list[str]] = typer.Option(None, "--source", "-s", help="nur diese Quelle(n)"),
-    days: Optional[int] = typer.Option(None, "--days", help="Veroeffentlichung der letzten N Tage"),
-    min_deadline_days: Optional[int] = typer.Option(
+    config: Path | None = typer.Option(None, "--config"),
+    keyword: list[str] | None = typer.Option(
+        None, "--keyword", "-k", help="Suchbegriff (mehrfach moeglich)"
+    ),
+    cpv: list[str] | None = typer.Option(None, "--cpv", help="CPV-Code (mehrfach moeglich)"),
+    country: list[str] | None = typer.Option(None, "--country", help="Land, ISO-3 (z. B. DEU)"),
+    source: list[str] | None = typer.Option(None, "--source", "-s", help="nur diese Quelle(n)"),
+    days: int | None = typer.Option(None, "--days", help="Veroeffentlichung der letzten N Tage"),
+    min_deadline_days: int | None = typer.Option(
         None, "--min-deadline-days", help="nur Ausschreibungen mit mind. N Tagen Restfrist"
     ),
     limit: int = typer.Option(50, "--limit", "-n", help="max. Treffer je Quelle"),
-    store: bool = typer.Option(True, "--store/--no-store", help="Ergebnisse in der Datenbank speichern"),
+    store: bool = typer.Option(
+        True, "--store/--no-store", help="Ergebnisse in der Datenbank speichern"
+    ),
     download_docs: bool = typer.Option(
         False, "--download-docs", help="frei zugaengliche Unterlagen herunterladen"
     ),
-    export: Optional[Path] = typer.Option(None, "--export", help="Ergebnisse in Datei exportieren"),
-    export_format: str = typer.Option("json", "--format", help=f"Exportformat: {', '.join(EXPORT_FORMATS)}"),
+    export: Path | None = typer.Option(None, "--export", help="Ergebnisse in Datei exportieren"),
+    export_format: str = typer.Option(
+        "json", "--format", help=f"Exportformat: {', '.join(EXPORT_FORMATS)}"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Ergebnis als JSON ausgeben"),
 ) -> None:
     """Ausschreibungen bei den konfigurierten Quellen recherchieren."""
@@ -307,10 +315,10 @@ def search(
 
 @app.command("list")
 def list_tenders(
-    config: Optional[Path] = typer.Option(None, "--config"),
+    config: Path | None = typer.Option(None, "--config"),
     limit: int = typer.Option(25, "--limit", "-n"),
-    source: Optional[list[str]] = typer.Option(None, "--source", "-s"),
-    search_text: Optional[str] = typer.Option(None, "--search", help="Titel/Vergabestelle enthaelt"),
+    source: list[str] | None = typer.Option(None, "--source", "-s"),
+    search_text: str | None = typer.Option(None, "--search", help="Titel/Vergabestelle enthaelt"),
     open_only: bool = typer.Option(False, "--open", help="nur laufende Ausschreibungen"),
     order_by: str = typer.Option("deadline", "--order", help="deadline | published | value | seen"),
     json_output: bool = typer.Option(False, "--json"),
@@ -349,7 +357,7 @@ def list_tenders(
 @app.command()
 def show(
     tender_id: str = typer.Argument(..., help="Tender-ID (z. B. ted:00123456-2026) oder Quell-ID"),
-    config: Optional[Path] = typer.Option(None, "--config"),
+    config: Path | None = typer.Option(None, "--config"),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Details einer gespeicherten Ausschreibung anzeigen."""
@@ -367,7 +375,9 @@ def show(
         ]
 
     if json_output:
-        console.print_json(jsonlib.dumps(tender.model_dump(mode="json"), ensure_ascii=False, default=str))
+        console.print_json(
+            jsonlib.dumps(tender.model_dump(mode="json"), ensure_ascii=False, default=str)
+        )
         return
 
     body = "\n".join(
@@ -380,9 +390,16 @@ def show(
             f"Land/Region:    {display(tender.country)} / {display(tender.region)}",
             f"CPV:            {display(tender.cpv_codes)}",
             f"Veroeffentlicht:{display(tender.publication_date)}",
-            f"Angebotsfrist:  {display(tender.submission_deadline)} "
-            f"(in {display(tender.days_until_deadline)} Tagen)",
-            f"Volumen:        {display(tender.estimated_value)} {display(tender.currency, missing='')}",
+            (
+                f"Angebotsfrist:  {display(tender.submission_deadline)} "
+                f"(in {display(tender.days_until_deadline)} Tagen)"
+            ),
+            f"Bindefrist:     {display(tender.binding_period_end)}",
+            f"Lieferfrist:    {display(tender.delivery_deadline)}",
+            (
+                f"Volumen:        {display(tender.estimated_value)} "
+                f"{display(tender.currency, missing='')}"
+            ),
             f"Verfahren:      {display(tender.procedure_type)}",
             f"Status:         {tender.status}",
             "",
@@ -423,7 +440,9 @@ def show(
         table.add_column("Konfidenz", justify="right")
         for alias in aliases:
             table.add_row(
-                alias.source, alias.source_id, display(alias.match_reason),
+                alias.source,
+                alias.source_id,
+                display(alias.match_reason),
                 display(alias.match_confidence),
             )
         console.print(table)
@@ -436,8 +455,10 @@ def show(
         table.add_column("Neu", overflow="fold")
         for change in changes[:20]:
             table.add_row(
-                display(change.detected_at), change.field,
-                display(change.old_value), display(change.new_value),
+                display(change.detected_at),
+                change.field,
+                display(change.old_value),
+                display(change.new_value),
             )
         console.print(table)
 
@@ -448,12 +469,12 @@ def show(
 @app.command()
 def export(
     output: Path = typer.Argument(..., help="Zieldatei"),
-    config: Optional[Path] = typer.Option(None, "--config"),
-    export_format: Optional[str] = typer.Option(
+    config: Path | None = typer.Option(None, "--config"),
+    export_format: str | None = typer.Option(
         None, "--format", help=f"{', '.join(EXPORT_FORMATS)} (Default: aus Dateiendung)"
     ),
     limit: int = typer.Option(1000, "--limit", "-n"),
-    source: Optional[list[str]] = typer.Option(None, "--source", "-s"),
+    source: list[str] | None = typer.Option(None, "--source", "-s"),
     open_only: bool = typer.Option(False, "--open"),
 ) -> None:
     """Gespeicherte Ausschreibungen exportieren (JSON, CSV, XLSX)."""
@@ -464,12 +485,14 @@ def export(
         records = repository.list_tenders(limit=limit, sources=source, open_only=open_only)
         tenders = [TenderRepository.to_tender(record) for record in records]
     path = export_tenders(tenders, output, fmt)
-    console.print(f"[green]{len(tenders)}[/green] Ausschreibungen exportiert nach [cyan]{path}[/cyan]")
+    console.print(
+        f"[green]{len(tenders)}[/green] Ausschreibungen exportiert nach [cyan]{path}[/cyan]"
+    )
 
 
 @app.command()
 def runs(
-    config: Optional[Path] = typer.Option(None, "--config"),
+    config: Path | None = typer.Option(None, "--config"),
     limit: int = typer.Option(10, "--limit", "-n"),
 ) -> None:
     """Letzte Rechercherlaeufe und Quellenstatus anzeigen."""
@@ -520,7 +543,7 @@ def runs(
 
 
 @app.command("cache-clear")
-def cache_clear(config: Optional[Path] = typer.Option(None, "--config")) -> None:
+def cache_clear(config: Path | None = typer.Option(None, "--config")) -> None:
     """HTTP-Cache leeren."""
     settings = _settings(config)
     from .core.cache import ResponseCache

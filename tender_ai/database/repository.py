@@ -8,9 +8,10 @@ haelt die Primaerquelle nach Quellprioritaet aktuell.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable, Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -162,9 +163,7 @@ class TenderRepository:
         old_doc_urls = {doc.url for doc in record.documents}
         new_doc_urls = {doc.url for doc in tender.documents}
         if old_doc_urls != new_doc_urls:
-            changes.append(
-                ("documents", str(len(old_doc_urls)), str(len(new_doc_urls)))
-            )
+            changes.append(("documents", str(len(old_doc_urls)), str(len(new_doc_urls))))
 
         # Felder uebernehmen
         record.title = tender.title
@@ -296,18 +295,19 @@ class TenderRepository:
         if open_only:
             stmt = stmt.where(
                 TenderRecord.submission_deadline.is_(None)
-                | (TenderRecord.submission_deadline >= datetime.now(timezone.utc))
+                | (TenderRecord.submission_deadline >= datetime.now(UTC))
             )
         if min_days_until_deadline is not None:
-            threshold = datetime.now(timezone.utc) + timedelta(days=min_days_until_deadline)
+            threshold = datetime.now(UTC) + timedelta(days=min_days_until_deadline)
             stmt = stmt.where(
                 TenderRecord.submission_deadline.is_(None)
                 | (TenderRecord.submission_deadline >= threshold)
             )
 
         if order_by == "deadline":
-            stmt = stmt.order_by(TenderRecord.submission_deadline.is_(None),
-                                 TenderRecord.submission_deadline.asc())
+            stmt = stmt.order_by(
+                TenderRecord.submission_deadline.is_(None), TenderRecord.submission_deadline.asc()
+            )
         elif order_by == "published":
             stmt = stmt.order_by(TenderRecord.publication_date.desc().nulls_last())
         elif order_by == "value":
@@ -356,7 +356,7 @@ class TenderRepository:
             }
         try:
             return Tender.model_validate(payload)
-        except Exception:
+        except Exception:  # noqa: BLE001 - ein defekter Payload darf die Anzeige nicht verhindern
             return Tender(
                 id=record.id,
                 source=record.source,
@@ -400,9 +400,7 @@ class TenderRepository:
     def last_runs(self, limit: int = 10) -> list[IngestRunRecord]:
         return list(
             self.session.scalars(
-                select(IngestRunRecord)
-                .order_by(IngestRunRecord.started_at.desc())
-                .limit(limit)
+                select(IngestRunRecord).order_by(IngestRunRecord.started_at.desc()).limit(limit)
             )
         )
 
@@ -439,11 +437,15 @@ class TenderRepository:
         return list(self.session.scalars(select(SourceStateRecord)))
 
     def stats(self) -> dict[str, Any]:
-        today = date.today()
-        open_stmt = select(func.count()).select_from(TenderRecord).where(
-            TenderRecord.is_primary.is_(True),
-            TenderRecord.submission_deadline.is_(None)
-            | (TenderRecord.submission_deadline >= datetime.now(timezone.utc)),
+        today = datetime.now(UTC).date()
+        open_stmt = (
+            select(func.count())
+            .select_from(TenderRecord)
+            .where(
+                TenderRecord.is_primary.is_(True),
+                TenderRecord.submission_deadline.is_(None)
+                | (TenderRecord.submission_deadline >= datetime.now(UTC)),
+            )
         )
         return {
             "tenders_total": self.count(only_primary=False),

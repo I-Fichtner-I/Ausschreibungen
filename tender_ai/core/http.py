@@ -12,7 +12,7 @@ import asyncio
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from urllib.parse import urlsplit
 
 import httpx
@@ -72,7 +72,7 @@ class HttpClient:
         )
 
     # --- Lifecycle ---------------------------------------------------------
-    async def __aenter__(self) -> HttpClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
@@ -98,6 +98,23 @@ class HttpClient:
         delay = self.config.backoff_base * (2**attempt)
         delay = min(delay, self.config.backoff_max)
         return delay * (0.5 + random.random() / 2)  # Jitter gegen Thundering Herd
+
+    async def _fetch_robots(self, url: str) -> httpx.Response | None:
+        """robots.txt ueber den regulaeren Pfad holen (Rate-Limit, Retry, Cache).
+
+        Nicht abrufbar (404, 5xx nach Wiederholungen, Netzfehler) -> ``None``;
+        die Interpretation ("keine Aussage -> erlaubt") trifft der RobotsGuard.
+        """
+        try:
+            return await self.request("GET", url, check_robots=False)
+        except HttpError as exc:
+            if exc.status_code in (401, 403, 404, 410):
+                log.debug("robots_absent", url=url, status=exc.status_code)
+            else:
+                log.warning("robots_unreachable", url=url, error=str(exc))
+            return None
+        except RobotsDisallowedError:  # pragma: no cover - check_robots=False schliesst das aus
+            return None
 
     async def request(
         self,
@@ -129,17 +146,16 @@ class HttpClient:
                     request=request,
                 )
 
-        should_check_robots = (
-            self.config.respect_robots if check_robots is None else check_robots
-        )
-        if should_check_robots and not await self.robots.allowed(full_url, self._client):
+        should_check_robots = self.config.respect_robots if check_robots is None else check_robots
+        if should_check_robots and not await self.robots.allowed(full_url, self._fetch_robots):
             raise RobotsDisallowedError(full_url)
 
         host = request.url.host or ""
         crawl_delay = self.robots.crawl_delay(full_url)
         if crawl_delay:
-            # robots.txt darf strenger sein als unsere eigene Konfiguration
-            self.rate_limiter.configure_host(host, 1.0 / crawl_delay)
+            # robots.txt darf strenger sein als unsere eigene Konfiguration -
+            # aber nie lockerer (tighten statt configure).
+            self.rate_limiter.tighten_host(host, 1.0 / crawl_delay)
 
         last_error: Exception | None = None
         for attempt in range(self.config.max_retries + 1):
@@ -155,8 +171,11 @@ class HttpClient:
                 delay = self._backoff_delay(attempt, None)
                 self.stats.retries += 1
                 log.warning(
-                    "http_retry", url=full_url, attempt=attempt + 1,
-                    error=str(exc), delay=round(delay, 2),
+                    "http_retry",
+                    url=full_url,
+                    attempt=attempt + 1,
+                    error=str(exc),
+                    delay=round(delay, 2),
                 )
                 await self._sleep(delay)
                 request = self._client.build_request(
@@ -168,8 +187,11 @@ class HttpClient:
                 delay = self._backoff_delay(attempt, response.headers.get("Retry-After"))
                 self.stats.retries += 1
                 log.warning(
-                    "http_retry_status", url=full_url, status=response.status_code,
-                    attempt=attempt + 1, delay=round(delay, 2),
+                    "http_retry_status",
+                    url=full_url,
+                    status=response.status_code,
+                    attempt=attempt + 1,
+                    delay=round(delay, 2),
                 )
                 await response.aclose()
                 await self._sleep(delay)
@@ -197,8 +219,10 @@ class HttpClient:
             return response
 
         self.stats.failures += 1
-        raise HttpError(full_url, f"Abruf nach {self.config.max_retries + 1} Versuchen "
-                                  f"fehlgeschlagen: {last_error}")
+        raise HttpError(
+            full_url,
+            f"Abruf nach {self.config.max_retries + 1} Versuchen fehlgeschlagen: {last_error}",
+        )
 
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:
         return await self.request("GET", url, **kwargs)

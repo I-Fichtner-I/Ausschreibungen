@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 import feedparser
@@ -25,13 +25,30 @@ from .base import SearchQuery, SourceStatus, TenderSource
 from .parsing import parse_date, strip_html
 from .registry import register_source
 
-# Konservative Erkennung einer Angebotsfrist im Feed-Text. Treffer werden als
-# aus dem Text extrahiert gekennzeichnet (Provenance mit original_text).
-_DEADLINE_PATTERN = re.compile(
-    r"(?:angebotsfrist|abgabefrist|einreichungsfrist|teilnahmefrist|frist|schlusstermin)"
-    r"[^0-9]{0,40}(\d{1,2}\.\d{1,2}\.\d{4})",
-    re.IGNORECASE,
-)
+# Konservative Erkennung von Fristen im Feed-Text. Die drei Fristarten werden
+# getrennt erkannt: nur eine ausdrueckliche Angebots-/Abgabefrist wird zur
+# ``submission_deadline``; Binde- und Lieferfrist landen in ihren eigenen
+# Feldern. Ein generisches "frist" wird bewusst NICHT akzeptiert.
+_DATE = r"[^0-9]{0,40}(\d{1,2}\.\d{1,2}\.\d{4})"
+_DEADLINE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "submission": re.compile(
+        r"(?:angebotsfrist|abgabefrist|einreichungsfrist|teilnahmefrist|bewerbungsfrist"
+        r"|schlusstermin|angebotsabgabe\s+bis|abgabe\s+bis)" + _DATE,
+        re.IGNORECASE,
+    ),
+    "binding": re.compile(r"(?:bindefrist|zuschlagsfrist)" + _DATE, re.IGNORECASE),
+    "delivery": re.compile(
+        r"(?:lieferfrist|ausfuehrungsfrist|ausführungsfrist|leistungszeitraum|liefertermin)"
+        + _DATE,
+        re.IGNORECASE,
+    ),
+}
+
+_KIND_LABELS = {
+    "submission": "Angebotsfrist",
+    "binding": "Bindefrist",
+    "delivery": "Lieferfrist",
+}
 
 
 @register_source
@@ -61,7 +78,7 @@ class RssSource(TenderSource):
                 self.log.warning("feed_disallowed_by_robots", url=url, error=str(exc))
                 failures.append(f"{url}: durch robots.txt untersagt")
                 continue
-            except Exception as exc:  # HttpError und Parserfehler gleichermassen
+            except Exception as exc:  # noqa: BLE001 - ein defekter Feed darf die anderen nicht stoppen
                 self.log.error("feed_fetch_failed", url=url, error=str(exc))
                 failures.append(f"{url}: {exc}")
                 continue
@@ -84,7 +101,9 @@ class RssSource(TenderSource):
         started = time.perf_counter()
         if not self.feeds:
             return SourceStatus(
-                name=self.name, type=self.type_name, ok=False,
+                name=self.name,
+                type=self.type_name,
+                ok=False,
                 message="Keine Feeds konfiguriert (sources.<name>.feeds)",
             )
         messages: list[str] = []
@@ -98,7 +117,7 @@ class RssSource(TenderSource):
                 continue
             try:
                 entries = await self._fetch_feed(feed, url)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - Health-Check meldet jeden Fehler, statt abzubrechen
                 messages.append(f"{name}: {type(exc).__name__}: {exc}")
                 continue
             reachable += 1
@@ -122,8 +141,7 @@ class RssSource(TenderSource):
         country = feed.get("country")
         authority = feed.get("authority")
         return [
-            self._to_tender(entry, url, feed_name, country, authority)
-            for entry in parsed.entries
+            self._to_tender(entry, url, feed_name, country, authority) for entry in parsed.entries
         ]
 
     def _to_tender(
@@ -142,21 +160,34 @@ class RssSource(TenderSource):
             getattr(entry, "summary", None) or getattr(entry, "description", None)
         )
 
-        publication_date = None
-        published_struct = getattr(entry, "published_parsed", None) or getattr(
-            entry, "updated_parsed", None
-        )
-        if published_struct:
-            publication_date = datetime(*published_struct[:6], tzinfo=timezone.utc).date()
+        publication_date: date | None = None
+        published_struct: time.struct_time | None = getattr(
+            entry, "published_parsed", None
+        ) or getattr(entry, "updated_parsed", None)
+        if published_struct is not None:
+            publication_date = datetime(
+                published_struct.tm_year,
+                published_struct.tm_mon,
+                published_struct.tm_mday,
+                published_struct.tm_hour,
+                published_struct.tm_min,
+                published_struct.tm_sec,
+                tzinfo=UTC,
+            ).date()
         else:
             publication_date = parse_date(getattr(entry, "published", None))
 
-        deadline, deadline_source = self._extract_deadline(title, description)
+        found = self._extract_dates(title, description)
+        submission = found.get("submission")
+        binding = found.get("binding")
+        delivery = found.get("delivery")
+
         notes: list[str] = []
-        if deadline is not None:
+        if found:
+            labels = ", ".join(_KIND_LABELS[kind] for kind in found)
             notes.append(
-                "Angebotsfrist aus dem Feed-Text extrahiert - vor einer Teilnahme "
-                "gegen die Originalbekanntmachung pruefen."
+                f"{labels} aus dem Feed-Text extrahiert - vor einer Teilnahme gegen die "
+                "Originalbekanntmachung pruefen."
             )
 
         return Tender(
@@ -169,7 +200,13 @@ class RssSource(TenderSource):
             description=description,
             country=country,
             publication_date=publication_date,
-            submission_deadline=deadline,
+            submission_deadline=(
+                datetime.combine(submission[0], datetime.min.time(), tzinfo=UTC)
+                if submission
+                else None
+            ),
+            binding_period_end=binding[0] if binding else None,
+            delivery_deadline=delivery[0] if delivery else None,
             status=TenderStatus.OPEN,
             notes=notes,
             provenance=Provenance(
@@ -178,7 +215,7 @@ class RssSource(TenderSource):
                 source_url=link,
                 method="rss",
                 document=feed_name,
-                original_text=deadline_source,
+                original_text=submission[1] if submission else None,
             ),
             raw={
                 "feed": feed_name,
@@ -187,22 +224,22 @@ class RssSource(TenderSource):
                 "summary": getattr(entry, "summary", None),
                 "link": link,
                 "published": getattr(entry, "published", None),
+                "extracted_dates": {kind: text for kind, (_d, text) in found.items()},
             },
         )
 
     @staticmethod
-    def _extract_deadline(*texts: str | None) -> tuple[datetime | None, str | None]:
-        for text in texts:
-            if not text:
-                continue
-            match = _DEADLINE_PATTERN.search(text)
-            if not match:
-                continue
-            parsed = parse_date(match.group(1))
-            if parsed is None:
-                continue
-            return (
-                datetime.combine(parsed, datetime.min.time(), tzinfo=timezone.utc),
-                match.group(0),
-            )
-        return None, None
+    def _extract_dates(*texts: str | None) -> dict[str, tuple[date, str]]:
+        """Fristen je Art aus den Texten ziehen; der erste Treffer je Art gewinnt."""
+        found: dict[str, tuple[date, str]] = {}
+        for kind, pattern in _DEADLINE_PATTERNS.items():
+            for text in texts:
+                if not text or kind in found:
+                    continue
+                match = pattern.search(text)
+                if not match:
+                    continue
+                parsed = parse_date(match.group(1))
+                if parsed is not None:
+                    found[kind] = (parsed, match.group(0))
+        return found

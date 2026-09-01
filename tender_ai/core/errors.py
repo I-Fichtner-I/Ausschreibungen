@@ -39,9 +39,7 @@ class RobotsDisallowedError(TenderAIError):
     """Abruf durch robots.txt untersagt - wird nicht umgangen."""
 
     def __init__(self, url: str) -> None:
-        super().__init__(
-            f"robots.txt der Zielseite untersagt den automatisierten Abruf: {url}"
-        )
+        super().__init__(f"robots.txt der Zielseite untersagt den automatisierten Abruf: {url}")
         self.url = url
 
 
