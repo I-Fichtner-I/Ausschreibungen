@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -173,3 +173,28 @@ def test_source_state_tracking(repository: TenderRepository):
     assert state.consecutive_failures == 0
     assert state.last_error is None
     assert state.last_result_count == 7
+
+
+def test_changes_for_returns_only_that_tender(repository: TenderRepository):
+    """T-09: Aenderungen werden per Query geholt, nicht aus den letzten N gefiltert."""
+    repository.upsert(tender())
+    repository.upsert(tender(id="feed:2", source="feed", source_id="2", title="Anderer Auftrag"))
+
+    # Viele Aenderungen an A, damit ein Fenster von 200 den Eintrag zu B verdraengen wuerde
+    for day in range(1, 205):
+        repository.upsert(
+            tender(submission_deadline=datetime(2036, 9, 15, 10, tzinfo=UTC) + timedelta(days=day))
+        )
+    repository.upsert(
+        tender(
+            id="feed:2",
+            source="feed",
+            source_id="2",
+            title="Anderer Auftrag - geaendert",
+        )
+    )
+
+    changes_b = repository.changes_for("feed:2")
+    assert changes_b and all(c.tender_id == "feed:2" for c in changes_b)
+    assert any(c.field == "title" for c in changes_b)
+    assert len(repository.changes_for("ted:1", limit=10)) == 10

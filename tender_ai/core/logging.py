@@ -17,6 +17,9 @@ def configure_logging(level: str = "INFO", fmt: str = "console") -> None:
         stream=sys.stderr,
         level=getattr(logging, level.upper(), logging.INFO),
     )
+    # Alembic protokolliert seine Autogenerate-Interna auf INFO; im CLI-Betrieb
+    # ist das Rauschen, das die eigentliche Ausgabe verdeckt.
+    logging.getLogger("alembic").setLevel(logging.WARNING)
     renderer = (
         structlog.processors.JSONRenderer()
         if fmt == "json"
