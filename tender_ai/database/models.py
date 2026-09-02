@@ -132,11 +132,53 @@ class TenderDocumentRecord(Base):
     url: Mapped[str | None] = mapped_column(Text, default=None)
     media_type: Mapped[str | None] = mapped_column(String(128), default=None)
     access: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
+    size_bytes: Mapped[int | None] = mapped_column(Integer, default=None)
     local_path: Mapped[str | None] = mapped_column(Text, default=None)
     checksum_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     tender: Mapped[TenderRecord] = relationship(back_populates="documents")
+    extract: Mapped[DocumentExtractRecord | None] = relationship(
+        back_populates="document", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class DocumentExtractRecord(Base):
+    """Extrahierter Inhalt einer Vergabeunterlage (Stufe 2).
+
+    Getrennt von ``tender_documents``, weil der Text um Groessenordnungen
+    groesser ist als die Metadaten - Listen und Suchen sollen ihn nicht
+    mitladen muessen.
+    """
+
+    __tablename__ = "document_extracts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tender_documents.id", ondelete="CASCADE"), index=True
+    )
+    tender_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tenders.id", ondelete="CASCADE"), index=True
+    )
+    extractor: Mapped[str | None] = mapped_column(String(32), default=None)
+    status: Mapped[str] = mapped_column(String(32), default="OK", index=True)
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+
+    text: Mapped[str | None] = mapped_column(Text, default=None)
+    page_count: Mapped[int] = mapped_column(Integer, default=0)
+    table_count: Mapped[int] = mapped_column(Integer, default=0)
+    character_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: Erkannte Tabellen als JSON - Rohmaterial der Artikelerkennung (Stufe 3).
+    tables: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    doc_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    ocr_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), index=True, default=None)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, default=None)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    document: Mapped[TenderDocumentRecord] = relationship(back_populates="extract")
 
 
 class TenderChangeRecord(Base):

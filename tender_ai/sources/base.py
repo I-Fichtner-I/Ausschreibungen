@@ -13,19 +13,53 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar
+from urllib.parse import urlsplit
 
 from ..config import SearchConfig, Settings, SourceConfig
 from ..core.http import HttpClient
 from ..core.logging import get_logger
 from ..models.common import normalize_text
-from ..models.tender import Tender, TenderDocument
+from ..models.tender import DocumentAccess, Tender, TenderDocument
 
 log = get_logger(__name__)
 
 _SAFE_PATH_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _MAX_PATH_COMPONENT = 120
+
+#: Media-Type -> Dateiendung. Der Suffix entscheidet spaeter mit, welcher
+#: Extraktor greift, deshalb wird er nicht aus der URL geraten, wenn der Server
+#: einen Typ meldet.
+_SUFFIX_BY_MEDIA_TYPE = {
+    "application/pdf": ".pdf",
+    "application/xml": ".xml",
+    "text/xml": ".xml",
+    "text/html": ".html",
+    "application/xhtml+xml": ".html",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+    "application/zip": ".zip",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-excel": ".xls",
+}
+
+_KNOWN_SUFFIXES = frozenset(_SUFFIX_BY_MEDIA_TYPE.values())
+
+
+def suffix_for(media_type: str | None, url: str | None = None) -> str:
+    """Dateiendung aus Media-Type, sonst aus der URL; Rueckfall ``.bin``."""
+    if media_type:
+        mapped = _SUFFIX_BY_MEDIA_TYPE.get(media_type.split(";")[0].strip().lower())
+        if mapped:
+            return mapped
+    if url:
+        suffix = PurePosixPath(urlsplit(url).path).suffix.lower()
+        if suffix in _KNOWN_SUFFIXES:
+            return suffix
+    return ".bin"
 
 
 def safe_document_path(base: Path, source: str, source_id: str, suffix: str) -> Path:
@@ -206,11 +240,33 @@ class TenderSource(ABC):
     async def download_documents(self, tender: Tender, destination: Path) -> list[TenderDocument]:
         """Frei zugaengliche Unterlagen herunterladen.
 
-        Geschuetzte Dokumente (Login, Captcha, Paywall) werden bewusst nicht
-        abgerufen, sondern mit entsprechendem ``access``-Status vermerkt.
-        Zielpfade sind ausschliesslich ueber ``safe_document_path`` zu bilden.
+        Standardverhalten fuer alle Quellen: jedes Dokument mit
+        ``access = PUBLIC`` wird gestreamt in ``destination`` abgelegt. Nicht
+        oeffentliche Dokumente (Login, Captcha, Paywall) werden bewusst **nicht**
+        abgerufen, sondern nur mit ihrem ``access``-Status vermerkt.
+
+        Ein fehlgeschlagener Download kostet nur dieses eine Dokument; der
+        Grund landet in ``document.note``.
         """
-        return []
+        downloaded: list[TenderDocument] = []
+        for index, document in enumerate(tender.documents):
+            if document.access is not DocumentAccess.PUBLIC or not document.url:
+                continue
+            suffix = suffix_for(document.media_type, document.url)
+            name = f"{tender.source_id}-{index}" if len(tender.documents) > 1 else tender.source_id
+            target = safe_document_path(destination, tender.source, name, suffix)
+            try:
+                path = await self.http.download(document.url, target)
+            except Exception as exc:  # noqa: BLE001 - ein Dokument darf den Rest nicht stoppen
+                self.log.warning("document_download_failed", url=document.url, error=str(exc))
+                document.note = f"Download fehlgeschlagen: {exc}"
+                continue
+            document.local_path = str(path)
+            document.retrieved_at = datetime.now(UTC)
+            document.size_bytes = path.stat().st_size
+            document.checksum_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            downloaded.append(document)
+        return downloaded
 
     async def health_check(self) -> SourceStatus:
         """Erreichbarkeit und Parsing mit einer minimalen Suche pruefen."""

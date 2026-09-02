@@ -6,6 +6,7 @@ tender-ai doctor               Quellen auf Erreichbarkeit pruefen
 tender-ai search               Ausschreibungen recherchieren (live)
 tender-ai list                 gespeicherte Ausschreibungen anzeigen
 tender-ai show <id>            Details einer Ausschreibung
+tender-ai documents <id>       Vergabeunterlagen laden und auslesen
 tender-ai export               Ergebnisse als JSON/CSV/XLSX ausgeben
 tender-ai runs                 letzte Rechercherlaeufe
 tender-ai cache-clear          HTTP-Cache leeren
@@ -34,7 +35,7 @@ from .database.session import session_scope
 from .export.exporters import EXPORT_FORMATS, export_tenders
 from .models.common import display as _display
 from .models.tender import Tender
-from .services import check_sources, run_search
+from .services import check_sources, fetch_documents, run_search
 from .sources.base import SearchQuery
 from .sources.registry import available_types
 
@@ -534,6 +535,76 @@ def runs(
                 _safe(state.last_error, missing="-"),
             )
         console.print(state_table)
+
+
+@app.command()
+def documents(
+    tender_id: str = typer.Argument(..., help="Tender-ID (z. B. ted:00123456-2026) oder Quell-ID"),
+    config: Path | None = typer.Option(None, "--config"),
+    extract: bool = typer.Option(
+        True, "--extract/--no-extract", help="Text und Tabellen aus den Unterlagen auslesen"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="bereits vorhandene Dateien erneut herunterladen"
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Vergabeunterlagen einer Ausschreibung laden und auslesen (Stufe 2)."""
+    settings = _settings(config)
+    try:
+        report = asyncio.run(fetch_documents(settings, tender_id, extract=extract, force=force))
+    except ConfigError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        console.print_json(jsonlib.dumps(report.as_dict(), ensure_ascii=False, default=str))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold]{_safe(report.title)}[/bold]\n{escape(report.tender_id)}",
+            title="Vergabeunterlagen",
+        )
+    )
+    if not report.documents:
+        console.print("[yellow]Keine abrufbaren Unterlagen gefunden.[/yellow]")
+    else:
+        table = Table(header_style="bold")
+        table.add_column("Dokument", overflow="fold", max_width=40)
+        table.add_column("Zugriff")
+        table.add_column("Extraktor")
+        table.add_column("Status")
+        table.add_column("Seiten", justify="right")
+        table.add_column("Tabellen", justify="right")
+        table.add_column("Zeichen", justify="right")
+        for document in report.documents:
+            status = document.status or "-"
+            style = (
+                "green"
+                if status == "OK"
+                else ("yellow" if status in ("PARTIAL", "EMPTY") else "red")
+            )
+            table.add_row(
+                _safe(document.name or document.local_path),
+                _safe(document.access),
+                _safe(document.extractor),
+                f"[{style}]{escape(status)}[/{style}]",
+                str(document.page_count),
+                str(document.table_count),
+                f"{document.character_count:,}".replace(",", "."),
+            )
+        console.print(table)
+
+    console.print(
+        f"Geladen: [green]{report.downloaded}[/green], ausgelesen: {report.extracted}, "
+        f"fehlgeschlagen: {report.failed}, nicht oeffentlich: {report.skipped_restricted}"
+    )
+    for document in report.documents:
+        if document.note:
+            console.print(
+                f"[yellow]Hinweis[/yellow] {_safe(document.name)}: {_safe(document.note)}"
+            )
 
 
 @app.command("db-upgrade")

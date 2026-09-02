@@ -10,6 +10,8 @@ anyio==4.14.2
     # via
     #   httpx
     #   tender-ai
+beautifulsoup4==4.15.0
+    # via tender-ai
 boolean-py==5.0
     # via license-expression
 cachecontrol==0.14.4
@@ -19,18 +21,26 @@ certifi==2026.7.22
     #   httpcore
     #   httpx
     #   requests
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
 charset-normalizer==3.5.1
-    # via requests
+    # via
+    #   pdfminer-six
+    #   requests
 colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   pytest
     #   typer
 coverage==7.16.0
     # via pytest-cov
+cryptography==50.0.1
+    # via pdfminer-six
 cyclonedx-python-lib==11.12.0
     # via pip-audit
 defusedxml==0.7.1
-    # via py-serializable
+    # via
+    #   fpdf2
+    #   py-serializable
 et-xmlfile==2.0.0
     # via openpyxl
 feedparser==6.0.14
@@ -39,6 +49,10 @@ feedparser-sgmllib==2.1.0
     # via feedparser
 filelock==3.32.5
     # via cachecontrol
+fonttools==4.64.0
+    # via fpdf2
+fpdf2==2.8.8
+    # via tender-ai
 greenlet==3.5.5 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'ppc64le' or platform_machine == 'win32' or platform_machine == 'x86_64'
     # via sqlalchemy
 h11==0.16.0
@@ -66,6 +80,10 @@ librt==0.15.0 ; platform_python_implementation != 'PyPy'
     # via mypy
 license-expression==30.4.4
     # via cyclonedx-python-lib
+lxml==6.1.2
+    # via
+    #   python-docx
+    #   tender-ai
 mako==1.4.1
     # via alembic
 markdown-it-py==4.2.0
@@ -91,6 +109,14 @@ packaging==26.3
     #   pytest
 pathspec==1.1.1
     # via mypy
+pdfminer-six==20260107
+    # via pdfplumber
+pdfplumber==0.11.10
+    # via tender-ai
+pillow==12.3.0
+    # via
+    #   fpdf2
+    #   pdfplumber
 pip==26.2.1
     # via pip-api
 pip-api==0.0.34
@@ -107,6 +133,8 @@ pluggy==1.6.0
     #   pytest-cov
 py-serializable==2.1.0
     # via cyclonedx-python-lib
+pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
 pydantic==2.13.5
     # via
     #   pydantic-settings
@@ -121,6 +149,8 @@ pygments==2.21.0
     #   rich
 pyparsing==3.3.2
     # via pip-requirements-parser
+pypdfium2==5.13.0
+    # via pdfplumber
 pytest==9.1.1
     # via
     #   pytest-asyncio
@@ -129,6 +159,8 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
     # via tender-ai
 pytest-cov==7.1.0
+    # via tender-ai
+python-docx==1.2.0
     # via tender-ai
 python-dotenv==1.2.3
     # via
@@ -153,6 +185,8 @@ shellingham==1.5.4
     # via typer
 sortedcontainers==2.4.0
     # via cyclonedx-python-lib
+soupsieve==2.9.2
+    # via beautifulsoup4
 sqlalchemy==2.0.52
     # via
     #   alembic
@@ -171,11 +205,13 @@ typing-extensions==4.16.0
     # via
     #   alembic
     #   anyio
+    #   beautifulsoup4
     #   cyclonedx-python-lib
     #   mypy
     #   pydantic
     #   pydantic-core
     #   pytest-asyncio
+    #   python-docx
     #   sqlalchemy
     #   typing-inspection
 typing-inspection==0.4.4

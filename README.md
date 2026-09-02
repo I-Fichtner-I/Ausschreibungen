@@ -6,13 +6,17 @@ Ausschreibungen.
 Das Projekt wird **stufenweise** gebaut: jede Stufe ist einzeln lauffaehig und
 testbar, bevor die naechste beginnt.
 
-> **Stufe 1 ist fertig und kann getestet werden: Ausschreibungen automatisiert
-> recherchieren.**
+> **Stufe 1 ist fertig: Ausschreibungen automatisiert recherchieren.**
 > Quell-Adapter (TED, RSS-Portale, Offline-Fixture), einheitliches Datenmodell,
 > Dublettenerkennung, Speicherung, Aenderungserkennung, Export und CLI.
-> Die Stufen 2-6 (Dokumentenanalyse, Artikelextraktion, Preisrecherche,
-> Kalkulation, Scoring, Dashboard) folgen danach - siehe
-> [docs/architecture.md](docs/architecture.md).
+>
+> **Stufe 2 ist begonnen: Vergabeunterlagen beschaffen und auslesen.**
+> `tender-ai documents <id>` laedt die frei zugaenglichen Unterlagen einer
+> Ausschreibung und extrahiert Text und Tabellen aus PDF, DOCX, XLSX, HTML und
+> CSV. Anforderungserkennung und Risiko-Score folgen als naechstes.
+>
+> Die Stufen 3-6 (Artikelextraktion, Preisrecherche, Kalkulation, Scoring,
+> Dashboard) folgen danach - siehe [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -46,7 +50,18 @@ Zeigt je Quelle, ob der Endpunkt erreichbar ist und die Antwort geparst werden
 kann. **Damit zuerst testen** - der Befehl sagt genau, welche Quelle klemmt und
 warum.
 
-### 3. Echte Recherche
+### 3. Vergabeunterlagen auslesen (Stufe 2)
+
+```bash
+tender-ai documents ted:00123456-2026          # laedt und extrahiert
+tender-ai documents ted:00123456-2026 --json   # maschinenlesbar
+```
+
+Nur Dokumente mit `access = PUBLIC` werden abgerufen. Geschuetzte Unterlagen
+(Login, Captcha, Paywall) werden uebersprungen und in der Ausgabe als
+"nicht oeffentlich" ausgewiesen - sie werden nicht umgangen.
+
+### 4. Echte Recherche
 
 ```bash
 # EU-weit (TED) nach Monitoren, veroeffentlicht in den letzten 14 Tagen
@@ -74,6 +89,7 @@ tender-ai runs                              # Laufprotokoll + Quellenstatus
 | `tender-ai search [...]` | recherchieren (siehe `--help`) |
 | `tender-ai list [--open] [--search TEXT]` | gespeicherte Ausschreibungen |
 | `tender-ai show <id>` | Details, Dokumente, Dubletten, Aenderungen |
+| `tender-ai documents <id>` | Vergabeunterlagen laden und auslesen (Stufe 2) |
 | `tender-ai export <datei>` | JSON / CSV / XLSX |
 | `tender-ai runs` | letzte Laeufe und Quellenstatus |
 | `tender-ai cache-clear` | HTTP-Cache leeren |
@@ -223,7 +239,8 @@ tender_ai/
 ├── core/                  HTTP (Retry/Backoff/Rate-Limit/Cache), robots.txt, Logging, Fehler
 ├── models/                Tender, TenderLot, TenderDocument, Provenance, …
 ├── sources/               base.py, registry.py, ted.py, rss.py, fixture.py, parsing.py
-├── services/              run_search, check_sources - genutzt von CLI und Dashboard
+├── services/              run_search, check_sources, fetch_documents
+├── extraction/            PDF, DOCX, XLSX, HTML, Text/CSV -> Seiten und Tabellen
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
 ├── database/              SQLAlchemy-Modelle, Session, Repository, Alembic-Migrationen
 └── export/                JSON / CSV / XLSX

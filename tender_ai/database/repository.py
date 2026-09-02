@@ -18,9 +18,11 @@ from sqlalchemy.orm import Session
 
 from ..config import DedupConfig
 from ..models.common import blocking_key, normalize_text, utcnow
-from ..models.tender import Tender, TenderStatus
+from ..models.document import ExtractedDocument
+from ..models.tender import Tender, TenderDocument, TenderStatus
 from ..pipeline.dedup import DuplicateDetector, DuplicateMatch
 from .models import (
+    DocumentExtractRecord,
     IngestRunRecord,
     SourceStateRecord,
     TenderAliasRecord,
@@ -335,6 +337,60 @@ class TenderRepository:
                 select(TenderChangeRecord)
                 .order_by(TenderChangeRecord.detected_at.desc())
                 .limit(limit)
+            )
+        )
+
+    # --- Dokumente und Extrakte (Stufe 2) ----------------------------------
+    def documents_for(self, tender_id: str) -> list[TenderDocumentRecord]:
+        return list(
+            self.session.scalars(
+                select(TenderDocumentRecord)
+                .where(TenderDocumentRecord.tender_id == tender_id)
+                .order_by(TenderDocumentRecord.id)
+            )
+        )
+
+    def update_document(self, record: TenderDocumentRecord, document: TenderDocument) -> None:
+        """Downloadergebnis am Dokument vermerken."""
+        record.local_path = document.local_path
+        record.retrieved_at = document.retrieved_at
+        record.checksum_sha256 = document.checksum_sha256
+        record.size_bytes = document.size_bytes
+        record.media_type = document.media_type or record.media_type
+        record.access = str(document.access)
+        self.session.flush()
+
+    def save_extract(
+        self, document_record: TenderDocumentRecord, extract: ExtractedDocument
+    ) -> DocumentExtractRecord:
+        """Extraktionsergebnis speichern (je Dokument genau ein Extrakt)."""
+        record = document_record.extract or DocumentExtractRecord(
+            document_id=document_record.id, tender_id=document_record.tender_id
+        )
+        record.extractor = extract.extractor
+        record.status = str(extract.status)
+        record.error = extract.error
+        record.text = extract.text or None
+        record.page_count = extract.page_count
+        record.table_count = len(extract.tables)
+        record.character_count = extract.character_count
+        record.tables = _json_ready([table.model_dump(mode="json") for table in extract.tables])
+        record.doc_metadata = _json_ready(extract.metadata)
+        record.truncated = extract.truncated
+        record.ocr_used = extract.ocr_used
+        record.checksum_sha256 = extract.checksum_sha256
+        record.size_bytes = extract.size_bytes
+        record.extracted_at = extract.extracted_at
+        document_record.extract = record
+        self.session.flush()
+        return record
+
+    def extracts_for(self, tender_id: str) -> list[DocumentExtractRecord]:
+        return list(
+            self.session.scalars(
+                select(DocumentExtractRecord)
+                .where(DocumentExtractRecord.tender_id == tender_id)
+                .order_by(DocumentExtractRecord.id)
             )
         )
 

@@ -13,7 +13,6 @@ angepasst - nicht dieser Code.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 from ..config import TedSourceConfig
@@ -26,7 +25,7 @@ from ..models.tender import (
     TenderStatus,
     make_tender_id,
 )
-from .base import SearchQuery, TenderSource, safe_document_path
+from .base import SearchQuery, TenderSource
 from .parsing import (
     all_texts,
     first_text,
@@ -232,26 +231,6 @@ class TedSource(TenderSource):
         if not notices:
             return None
         return self._to_tender(notices[0])
-
-    async def download_documents(self, tender: Tender, destination: Path) -> list[TenderDocument]:
-        """Frei zugaengliche TED-Dokumente (PDF/XML) herunterladen."""
-        downloaded: list[TenderDocument] = []
-        for document in tender.documents:
-            if document.access is not DocumentAccess.PUBLIC or not document.url:
-                continue
-            suffix = ".pdf" if (document.media_type or "").endswith("pdf") else ".xml"
-            target = safe_document_path(destination, tender.source, tender.source_id, suffix)
-            try:
-                path = await self.http.download(document.url, target, check_robots=False)
-
-            except Exception as exc:  # noqa: BLE001 - ein fehlgeschlagener Download stoppt nicht die uebrigen
-                self.log.warning("document_download_failed", url=document.url, error=str(exc))
-                document.note = f"Download fehlgeschlagen: {exc}"
-                continue
-            document.local_path = str(path)
-            document.retrieved_at = utcnow()
-            downloaded.append(document)
-        return downloaded
 
     # --- Mapping -----------------------------------------------------------
     def _status_from(self, notice_type: str | None, deadline: datetime | None) -> TenderStatus:

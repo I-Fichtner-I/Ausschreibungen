@@ -23,7 +23,7 @@ Stufe ein echter Zwischenstand vorhanden statt eines halbfertigen Ganzen.
 | Stufe | Inhalt | Status |
 |-------|--------|--------|
 | **1** | **Ausschreibungen recherchieren** - Quell-Adapter, einheitliches Datenmodell, Dubletten, Speicherung, Aenderungserkennung, Export, CLI | **fertig, testbar** |
-| 2 | Ausschreibung analysieren - Detailseiten, Dokumentendownload, PDF/DOCX/XLSX-Parsing, Anforderungen, Risiko-Score | offen |
+| **2** | **Ausschreibung analysieren** - Dokumentendownload und Textextraktion (PDF/DOCX/XLSX/HTML/CSV) **fertig**; Anforderungen und Risiko-Score offen | teilweise fertig |
 | 3 | Artikel extrahieren - Tabellenerkennung, `TenderItem`, Match-Confidence | offen |
 | 4 | Produkt-Matching und Preisrecherche - Lieferanten, `PriceOffer`, Preisstatistik | offen |
 | 5 | Kosten, Profitabilitaet, Szenarien, Score, Entscheidungsvorlage | offen |
@@ -104,6 +104,9 @@ umgangen), `TenderRequirements` (ab Stufe 2 gefuellt), `Provenance`,
 `tenders`, `tender_aliases` (weitere Fundstellen derselben Ausschreibung),
 `tender_documents`, `tender_changes` (Aenderungshistorie), `ingest_runs`
 (Laufprotokoll), `source_states` (Quellenstatus, Fehler in Folge).
+
+Seit Stufe 2: `document_extracts` (Text, Tabellen und Metadaten je Unterlage,
+1:1 zum Dokument - der Text bleibt aus den Listenabfragen heraus).
 
 Geplant ab Stufe 3: `tender_items`, `suppliers`, `price_offers`,
 `cost_calculations`, `profitability_analyses`, `risk_analyses`,
