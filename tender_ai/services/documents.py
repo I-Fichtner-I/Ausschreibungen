@@ -21,7 +21,7 @@ from ..core.logging import get_logger
 from ..database.repository import TenderRepository
 from ..database.session import session_scope
 from ..extraction import extract_document
-from ..models.document import ExtractionStatus
+from ..models.document import ExtractedDocument, ExtractedPage, ExtractedTable, ExtractionStatus
 from ..models.tender import DocumentAccess, Tender
 from ..sources.registry import build_sources
 
@@ -207,3 +207,30 @@ def _extract_one(
 def fetch_documents_sync(settings: Settings, tender_id: str, **kwargs: Any) -> DocumentReport:
     """Synchroner Einstieg fuer CLI und Skripte."""
     return asyncio.run(fetch_documents(settings, tender_id, **kwargs))
+
+
+def documents_from_db(repository: TenderRepository, tender_id: str) -> list[ExtractedDocument]:
+    """Gespeicherte Extrakte zurueck in das Analysemodell wandeln."""
+    documents: list[ExtractedDocument] = []
+    for record in repository.extracts_for(tender_id):
+        document = ExtractedDocument(
+            source_path=str(record.document_id),
+            file_name=(record.document.name if record.document else None)
+            or (record.document.local_path if record.document else None),
+            media_type=record.document.media_type if record.document else None,
+            extractor=record.extractor,
+            status=record.status,  # type: ignore[arg-type]
+            error=record.error,
+            metadata=dict(record.doc_metadata or {}),
+            size_bytes=record.size_bytes,
+            checksum_sha256=record.checksum_sha256,
+            truncated=record.truncated,
+            ocr_used=record.ocr_used,
+        )
+        # Der Volltext wird als eine Seite gefuehrt, wenn die Seitengrenzen
+        # nicht mitgespeichert wurden; die Seitenzahl bleibt als Kennzahl.
+        if record.text:
+            document.pages.append(ExtractedPage(number=1, text=record.text))
+        document.tables = [ExtractedTable.model_validate(table) for table in (record.tables or [])]
+        documents.append(document)
+    return documents

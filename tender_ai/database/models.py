@@ -99,6 +99,12 @@ class TenderRecord(Base):
     risk_analysis: Mapped[RiskAnalysisRecord | None] = relationship(
         back_populates="tender", cascade="all, delete-orphan", uselist=False
     )
+    items: Mapped[list[TenderItemRecord]] = relationship(
+        back_populates="tender", cascade="all, delete-orphan"
+    )
+    item_extraction: Mapped[ItemExtractionRecord | None] = relationship(
+        back_populates="tender", cascade="all, delete-orphan", uselist=False
+    )
 
     __table_args__ = (Index("ix_tenders_source_source_id", "source", "source_id", unique=True),)
 
@@ -229,6 +235,79 @@ class RiskAnalysisRecord(Base):
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     tender: Mapped[TenderRecord] = relationship(back_populates="risk_analysis")
+
+
+class ItemExtractionRecord(Base):
+    """Lauf der Artikelerkennung je Ausschreibung (Stufe 3).
+
+    Haelt die Kennzahlen des Laufs getrennt von den Positionen: der taegliche
+    Stapel muss wissen, ob sich seit der letzten Erkennung ueberhaupt etwas
+    geaendert hat, ohne dafuer alle Positionen zu laden.
+    """
+
+    __tablename__ = "item_extractions"
+
+    tender_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tenders.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    priceable_count: Mapped[int] = mapped_column(Integer, default=0)
+    average_confidence: Mapped[int] = mapped_column(Integer, default=0)
+    documents_scanned: Mapped[int] = mapped_column(Integer, default=0)
+    tables_scanned: Mapped[int] = mapped_column(Integer, default=0)
+    tables_used: Mapped[int] = mapped_column(Integer, default=0)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    #: Inhalts-Hash der Ausschreibung zum Erkennungszeitpunkt - nur bei
+    #: Aenderung ist ein erneuter Lauf noetig (wie bei ``risk_analyses``).
+    content_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    tender: Mapped[TenderRecord] = relationship(back_populates="item_extraction")
+
+
+class TenderItemRecord(Base):
+    """Eine erkannte Position des Leistungsverzeichnisses (Stufe 3).
+
+    Die Fundstelle (Dokument, Seite, Originalzeile) steht in derselben Zeile:
+    ohne sie waere eine Menge nur eine Zahl ohne Beleg.
+    """
+
+    __tablename__ = "tender_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tender_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tenders.id", ondelete="CASCADE"), index=True
+    )
+    #: Reihenfolge im Leistungsverzeichnis - fuer stabile Ausgaben.
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    position: Mapped[str | None] = mapped_column(String(64), default=None)
+    title: Mapped[str] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text, default=None)
+
+    quantity: Mapped[float | None] = mapped_column(Float, default=None)
+    quantity_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
+    unit: Mapped[str | None] = mapped_column(String(16), default=None, index=True)
+    unit_original: Mapped[str | None] = mapped_column(String(64), default=None)
+
+    manufacturer: Mapped[str | None] = mapped_column(String(255), default=None)
+    model_number: Mapped[str | None] = mapped_column(String(255), default=None)
+    article_number: Mapped[str | None] = mapped_column(String(128), default=None)
+    specifications: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    brand_locked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    confidence: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    #: Guete der Produktzuordnung - bleibt leer bis Stufe 4.
+    match_confidence: Mapped[int | None] = mapped_column(Integer, default=None)
+    source_kind: Mapped[str] = mapped_column(String(16), default="TABLE")
+
+    document: Mapped[str | None] = mapped_column(Text, default=None)
+    page: Mapped[int | None] = mapped_column(Integer, default=None)
+    section: Mapped[str | None] = mapped_column(Text, default=None)
+    original_text: Mapped[str | None] = mapped_column(Text, default=None)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    tender: Mapped[TenderRecord] = relationship(back_populates="items")
 
 
 class IngestRunRecord(Base):

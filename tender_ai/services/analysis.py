@@ -25,37 +25,9 @@ from ..core.logging import get_logger
 from ..database.repository import TenderRepository
 from ..database.session import session_scope
 from ..models.analysis import AnalysisResult, RequirementKind
-from ..models.document import ExtractedDocument, ExtractedPage, ExtractedTable
-from .documents import fetch_documents
+from .documents import documents_from_db, fetch_documents
 
 log = get_logger(__name__)
-
-
-def _documents_from_db(repository: TenderRepository, tender_id: str) -> list[ExtractedDocument]:
-    """Gespeicherte Extrakte zurueck in das Analysemodell wandeln."""
-    documents: list[ExtractedDocument] = []
-    for record in repository.extracts_for(tender_id):
-        document = ExtractedDocument(
-            source_path=str(record.document_id),
-            file_name=(record.document.name if record.document else None)
-            or (record.document.local_path if record.document else None),
-            media_type=record.document.media_type if record.document else None,
-            extractor=record.extractor,
-            status=record.status,  # type: ignore[arg-type]
-            error=record.error,
-            metadata=dict(record.doc_metadata or {}),
-            size_bytes=record.size_bytes,
-            checksum_sha256=record.checksum_sha256,
-            truncated=record.truncated,
-            ocr_used=record.ocr_used,
-        )
-        # Der Volltext wird als eine Seite gefuehrt, wenn die Seitengrenzen
-        # nicht mitgespeichert wurden; die Seitenzahl bleibt als Kennzahl.
-        if record.text:
-            document.pages.append(ExtractedPage(number=1, text=record.text))
-        document.tables = [ExtractedTable.model_validate(table) for table in (record.tables or [])]
-        documents.append(document)
-    return documents
 
 
 async def analyze_tender(
@@ -87,7 +59,7 @@ async def analyze_tender(
             raise ConfigError(f"Ausschreibung nicht gefunden: {tender_id}")
 
         tender = TenderRepository.to_tender(record)
-        documents = _documents_from_db(repository, resolved_id)
+        documents = documents_from_db(repository, resolved_id)
 
         findings = extract_requirements(documents)
         tender.requirements = findings_to_requirements(findings)

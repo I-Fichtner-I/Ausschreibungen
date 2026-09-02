@@ -18,18 +18,21 @@ from sqlalchemy.orm import Session
 
 from ..config import DedupConfig
 from ..models.analysis import AnalysisResult
-from ..models.common import blocking_key, normalize_text, utcnow
+from ..models.common import Provenance, blocking_key, normalize_text, utcnow
 from ..models.document import ExtractedDocument
+from ..models.item import ItemExtractionResult, TenderItem
 from ..models.tender import Tender, TenderDocument, TenderStatus
 from ..pipeline.dedup import DuplicateDetector, DuplicateMatch
 from .models import (
     DocumentExtractRecord,
     IngestRunRecord,
+    ItemExtractionRecord,
     RiskAnalysisRecord,
     SourceStateRecord,
     TenderAliasRecord,
     TenderChangeRecord,
     TenderDocumentRecord,
+    TenderItemRecord,
     TenderRecord,
 )
 
@@ -420,6 +423,109 @@ class TenderRepository:
 
     def risk_for(self, tender_id: str) -> RiskAnalysisRecord | None:
         return self.session.get(RiskAnalysisRecord, tender_id)
+
+    def save_items(
+        self, result: ItemExtractionResult, tender_record: TenderRecord | None = None
+    ) -> ItemExtractionRecord:
+        """Erkannte Positionen speichern - der Lauf ersetzt das Vorergebnis.
+
+        Die Erkennung ist aus den Unterlagen reproduzierbar; ein Zusammenfuehren
+        alter und neuer Positionen wuerde nur Karteileichen erzeugen, wenn eine
+        korrigierte Ausschreibung Positionen streicht.
+        """
+        for existing in self.items_for(result.tender_id):
+            self.session.delete(existing)
+        self.session.flush()
+
+        for ordinal, item in enumerate(result.items):
+            provenance = item.provenance
+            self.session.add(
+                TenderItemRecord(
+                    tender_id=result.tender_id,
+                    ordinal=ordinal,
+                    position=item.position,
+                    title=item.title,
+                    description=item.description,
+                    quantity=item.quantity,
+                    quantity_estimated=item.quantity_estimated,
+                    unit=item.unit,
+                    unit_original=item.unit_original,
+                    manufacturer=item.manufacturer,
+                    model_number=item.model_number,
+                    article_number=item.article_number,
+                    specifications=_json_ready(dict(item.specifications)),
+                    brand_locked=item.brand_locked,
+                    confidence=item.confidence,
+                    match_confidence=item.match_confidence,
+                    source_kind=str(item.source_kind),
+                    document=provenance.document if provenance else None,
+                    page=provenance.page if provenance else None,
+                    section=provenance.section if provenance else None,
+                    original_text=provenance.original_text if provenance else None,
+                    warnings=list(item.warnings),
+                )
+            )
+
+        record = self.session.get(ItemExtractionRecord, result.tender_id)
+        if record is None:
+            record = ItemExtractionRecord(tender_id=result.tender_id)
+            self.session.add(record)
+        if tender_record is not None:
+            record.content_hash = tender_record.content_hash
+        record.item_count = result.item_count
+        record.priceable_count = result.priceable_count
+        record.average_confidence = result.average_confidence
+        record.documents_scanned = result.documents_scanned
+        record.tables_scanned = result.tables_scanned
+        record.tables_used = result.tables_used
+        record.warnings = list(result.warnings)
+        record.extracted_at = result.extracted_at
+        self.session.flush()
+        return record
+
+    def items_for(self, tender_id: str, min_confidence: int = 0) -> list[TenderItemRecord]:
+        """Positionen einer Ausschreibung in der Reihenfolge des Dokuments."""
+        query = select(TenderItemRecord).where(TenderItemRecord.tender_id == tender_id)
+        if min_confidence > 0:
+            query = query.where(TenderItemRecord.confidence >= min_confidence)
+        return list(self.session.scalars(query.order_by(TenderItemRecord.ordinal)))
+
+    def item_extraction_for(self, tender_id: str) -> ItemExtractionRecord | None:
+        return self.session.get(ItemExtractionRecord, tender_id)
+
+    @staticmethod
+    def to_item(record: TenderItemRecord) -> TenderItem:
+        """Datensatz zurueck in das Modell - fuer Ausgabe und Folgestufen."""
+        provenance = None
+        if record.document or record.original_text:
+            provenance = Provenance(
+                source="document",
+                method="document",
+                document=record.document,
+                page=record.page,
+                section=record.section,
+                original_text=record.original_text,
+                confidence=record.confidence,
+            )
+        return TenderItem(
+            position=record.position,
+            title=record.title,
+            description=record.description,
+            quantity=record.quantity,
+            quantity_estimated=record.quantity_estimated,
+            unit=record.unit,
+            unit_original=record.unit_original,
+            manufacturer=record.manufacturer,
+            model_number=record.model_number,
+            article_number=record.article_number,
+            specifications=dict(record.specifications or {}),
+            brand_locked=record.brand_locked,
+            confidence=record.confidence,
+            match_confidence=record.match_confidence,
+            source_kind=record.source_kind,  # type: ignore[arg-type]
+            provenance=provenance,
+            warnings=list(record.warnings or []),
+        )
 
     def save_requirements(self, record: TenderRecord, tender: Tender) -> None:
         """Erkannte Anforderungen im Tender-Payload festhalten."""

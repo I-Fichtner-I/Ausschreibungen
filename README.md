@@ -17,8 +17,13 @@ testbar, bevor die naechste beginnt.
 > Mindestanforderungen, Zahlungs- und Lieferbedingungen, Zuschlagskriterien,
 > Herstellerbindung) und berechnet einen begruendeten Risiko-Score.
 >
-> Die Stufen 3-6 (Artikelextraktion, Preisrecherche, Kalkulation, Scoring,
-> Dashboard) folgen danach - siehe [docs/architecture.md](docs/architecture.md).
+> **Stufe 3 ist fertig: Artikel aus dem Leistungsverzeichnis erkennen.**
+> `tender-ai items <id>` liest aus den erkannten Tabellen die zu liefernden
+> Positionen - Ordnungszahl, Bezeichnung, Menge, Einheit, Hersteller, Typ,
+> Artikelnummer und Merkmale, jede mit Fundstelle und Konfidenz.
+>
+> Die Stufen 4-6 (Preisrecherche, Kalkulation, Scoring, Dashboard) folgen
+> danach - siehe [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -80,7 +85,47 @@ Volumen oder auswertbare Unterlagen, erzeugt genau das eigene Faktoren - eine
 unbekannte Ausschreibung soll nicht unauffaellig wirken. Die Auswertung ist
 regelbasiert: jeder Hinweis ist ein Fund im Text, keine Rechtsauskunft.
 
-### 5. Echte Recherche
+### 5. Artikel erkennen (Stufe 3)
+
+```bash
+tender-ai items ted:00123456-2026                     # Positionen auflisten
+tender-ai items ted:00123456-2026 --evidence          # mit Fundstelle je Position
+tender-ai items ted:00123456-2026 --min-confidence 60 # nur sicher gelesene Zeilen
+tender-ai items --all -n 50                           # Stapellauf
+```
+
+```
+Positionen: 5, kalkulierbar: 4, mittlere Konfidenz: 80
+Pos.   Bezeichnung                                  Menge      Einheit  Hersteller / Typ      Konf.
+1.10   Monitor 27 Zoll, Fabrikat: Muster GmbH ...     120      STK      Muster GmbH / MX-27      95
+1.30   Hoehenverstellbarer Schreibtisch 160x80 cm     ~60      STK      -                        75
+1.50   Vor-Ort-Montage                            UNKNOWN      H        -                        63
+
+Hinweis 1.50: Menge steht nicht fest: 'auf Abruf'
+```
+
+Gelesen wird aus den in Stufe 2 erkannten Tabellen - mit Kopfzeile ueber die
+Spaltennamen, ohne Kopfzeile ueber den Inhalt der Spalten. Erst wenn keine
+Tabelle auswertbar ist, greift die Rueckfallebene ueber Positionsmuster im
+Fliesstext; solche Positionen sind als `source_kind = TEXT` gekennzeichnet und
+tragen eine niedrigere Konfidenz.
+
+Drei Regeln, die das Ergebnis brauchbar halten:
+
+- **Keine erfundenen Mengen.** "auf Abruf" bleibt UNKNOWN, "ca. 20" wird als
+  Schaetzung gekennzeichnet (`~20`), ein mehrdeutiges "1.200" ebenfalls.
+- **Jede Position ist belegbar.** Dokument, Seite, Abschnitt und Originalzeile
+  stehen an der Position; `--evidence` zeigt sie an.
+- **Erkennung und Zuordnung sind zwei Dinge.** `confidence` sagt, wie sicher
+  die Zeile *gelesen* wurde. `match_confidence` bleibt leer, bis in Stufe 4 ein
+  konkretes Produkt zugeordnet ist - eine unsichere Zuordnung wird nicht durch
+  eine erfundene Zahl kaschiert.
+
+Eine Fabrikatsvorgabe ohne "oder gleichwertig" in derselben Position wird als
+`brand_locked` markiert - genau die Konstellation, die Alternativangebote
+ausschliesst.
+
+### 6. Echte Recherche
 
 ```bash
 # EU-weit (TED) nach Monitoren, veroeffentlicht in den letzten 14 Tagen
@@ -111,6 +156,8 @@ tender-ai runs                              # Laufprotokoll + Quellenstatus
 | `tender-ai documents <id>` | Vergabeunterlagen laden und auslesen (Stufe 2) |
 | `tender-ai analyze <id> [--findings]` | Anforderungen erkennen, Risiko bewerten |
 | `tender-ai analyze --all [-n N]` | alle laufenden Ausschreibungen bewerten |
+| `tender-ai items <id> [--evidence]` | Positionen des Leistungsverzeichnisses erkennen (Stufe 3) |
+| `tender-ai items --all [-n N]` | Positionen aller laufenden Ausschreibungen erkennen |
 | `tender-ai export <datei>` | JSON / CSV / XLSX |
 | `tender-ai runs` | letzte Laeufe und Quellenstatus |
 | `tender-ai cache-clear` | HTTP-Cache leeren |
@@ -264,9 +311,10 @@ tender_ai/
 ├── core/                  HTTP (Retry/Backoff/Rate-Limit/Cache), robots.txt, Logging, Fehler
 ├── models/                Tender, TenderLot, TenderDocument, Provenance, …
 ├── sources/               base.py, registry.py, ted.py, rss.py, fixture.py, parsing.py
-├── services/              run_search, check_sources, fetch_documents
+├── services/              run_search, check_sources, fetch_documents, analyze_tender, extract_tender_items
 ├── extraction/            PDF, DOCX, XLSX, HTML, Text/CSV -> Seiten und Tabellen
 ├── analysis/              Anforderungserkennung (Regeln) und Risiko-Score
+├── items/                 Artikelerkennung: Spaltenrollen, Einheiten, Positionen
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
 ├── database/              SQLAlchemy-Modelle, Session, Repository, Alembic-Migrationen
 └── export/                JSON / CSV / XLSX
@@ -274,8 +322,9 @@ tests/                     Offline-Tests (respx-Mocks)
 config.yaml  .env.example  docs/architecture.md
 ```
 
-Naechste Stufe: **Ausschreibungen analysieren** - Detailseiten und Unterlagen
-laden, PDF/DOCX/XLSX auswerten, Anforderungen und Risiken erkennen.
+Naechste Stufe: **Marktpreise recherchieren** - zu jeder erkannten Position
+Lieferanten und Preise finden, jede Preisangabe mit Quelle, Zeitpunkt,
+Waehrung, Netto/Brutto-Status, Versandkosten und Verfuegbarkeit.
 Details in [docs/architecture.md](docs/architecture.md).
 
 ## Review und Roadmap
