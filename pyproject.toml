@@ -49,6 +49,7 @@ include = ["tender_ai*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["slow: laufzeitintensive Tests (Benchmarks)"]
 
 [tool.coverage.run]
 branch = false

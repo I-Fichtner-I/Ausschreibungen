@@ -75,6 +75,9 @@ class DedupConfig(BaseModel):
     enabled: bool = True
     title_similarity_threshold: float = 0.90
     match_window_days: int = 21
+    #: Obergrenze fuer Kandidaten derselben Vergabestelle mit abweichendem
+    #: Titelanfang. Schuetzt Laeufe vor Behoerden mit sehr vielen Ausschreibungen.
+    max_authority_candidates: int = 200
 
 
 class CriteriaConfig(BaseModel):

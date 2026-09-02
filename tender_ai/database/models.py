@@ -51,6 +51,8 @@ class TenderRecord(Base):
     title_normalized: Mapped[str | None] = mapped_column(Text, default=None)
     contracting_authority: Mapped[str | None] = mapped_column(Text, default=None)
     authority_normalized: Mapped[str | None] = mapped_column(Text, default=None)
+    #: Gruppenschluessel der Dublettensuche (Vergabestelle + Titelanfang).
+    blocking_key: Mapped[str | None] = mapped_column(String(255), default=None, index=True)
     description: Mapped[str | None] = mapped_column(Text, default=None)
     country: Mapped[str | None] = mapped_column(String(8), default=None)
     region: Mapped[str | None] = mapped_column(String(128), default=None)

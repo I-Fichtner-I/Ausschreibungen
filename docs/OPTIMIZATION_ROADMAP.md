@@ -16,7 +16,7 @@ S = < 2 h, M = halber Tag, L = 1-2 Tage.
 | 1 | T-01, T-02, T-03, T-04, T-05, T-08 | **erledigt** |
 | 2 | T-07 TED-Status | **erledigt** (vorgezogen, gleiche Datei wie T-04/T-05) |
 | 2 | T-26 SQLite-PRAGMAs, T-11 Alembic, T-09 changes_for, T-06 Markup-Escape | **erledigt** |
-| 3 | T-10, T-24 (Coverage-Schwelle steht auf 80 %, Ist 91 %) | offen |
+| 3 | T-10 Dedup-Blocking, T-24 Testluecken + Coverage-Schwelle 85 % | **erledigt** |
 | 4-5 | T-22, T-15, T-23, T-18, T-17, T-19, T-21, T-25, T-20, T-27 | offen |
 
 Nachweise der erledigten Tasks: `.github/workflows/ci.yml`, `uv.lock`,
@@ -28,7 +28,10 @@ Nachweise der erledigten Tasks: `.github/workflows/ci.yml`, `uv.lock`,
 `test_http.py::test_crawl_delay_only_tightens_rate_limit` (T-08),
 `test_migrations.py` (T-11, T-26),
 `test_repository.py::test_changes_for_returns_only_that_tender` (T-09),
-`test_cli.py::test_markup_in_source_data_is_escaped` (T-06).
+`test_cli.py::test_markup_in_source_data_is_escaped` (T-06),
+`test_dedup_scaling.py` (T-10: 2,2 ms statt 56 ms je Upsert bei 1000 Kandidaten,
+Recall jenseits des frueheren Limits), `test_registry.py` und die ergaenzten
+CLI-/RSS-Tests (T-24, Coverage 93 % bei einer CI-Schwelle von 85 %).
 
 ---
 

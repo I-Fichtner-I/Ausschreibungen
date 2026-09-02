@@ -96,6 +96,7 @@ dedup:
   enabled: true
   title_similarity_threshold: 0.90   # 0..1, fuer den Fallback-Titelvergleich
   match_window_days: 21              # max. Abstand der Veroeffentlichungsdaten
+  max_authority_candidates: 200      # Kandidaten je Vergabestelle ausserhalb der Blocking-Gruppe
 
 # --- Mindestkriterien (ab Stufe 4 wirksam, hier bereits vorbereitet) ---------
 criteria:

@@ -184,3 +184,28 @@ async def test_binding_and_delivery_land_in_own_fields(settings: Settings, http_
     assert first.delivery_deadline.isoformat() == "2037-01-15"
     assert first.notes and "Bindefrist" in first.notes[0] and "Lieferfrist" in first.notes[0]
     assert first.provenance.original_text is None
+
+
+@respx.mock
+async def test_entity_expansion_feed_does_not_explode(settings: Settings, http_client: HttpClient):
+    """T-24/F-29: Ein Feed mit Entity-Expansion darf den Prozess nicht sprengen."""
+    billion_laughs = (
+        '<?xml version="1.0"?>'
+        "<!DOCTYPE lolz ["
+        '<!ENTITY lol "lol">'
+        '<!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">'
+        '<!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;">'
+        '<!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">'
+        "]>"
+        "<rss version='2.0'><channel><item><title>&lol3;</title></item></channel></rss>"
+    )
+    respx.get(FEED_URL).mock(return_value=httpx.Response(200, text=billion_laughs))
+    source = build_source(settings, http_client)
+    # Entweder der Parser lehnt ab (SourceError) oder er expandiert die Entities
+    # nicht - beides ist in Ordnung, ein Speicherabsturz waere es nicht.
+    try:
+        results = await source.search(SearchQuery(max_results=10))
+    except SourceError:
+        return
+    for tender in results:
+        assert len(tender.title or "") < 10_000
