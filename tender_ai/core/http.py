@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
@@ -230,11 +231,67 @@ class HttpClient:
     async def post(self, url: str, **kwargs: Any) -> httpx.Response:
         return await self.request("POST", url, **kwargs)
 
-    async def download(self, url: str, destination: Path, **kwargs: Any) -> Path:
-        """Datei herunterladen (Ausschreibungsunterlagen)."""
-        response = await self.request("GET", url, use_cache=False, **kwargs)
+    async def download(
+        self,
+        url: str,
+        destination: Path,
+        *,
+        max_bytes: int | None = None,
+        expected_types: Collection[str] | None = None,
+        check_robots: bool | None = None,
+    ) -> Path:
+        """Datei herunterladen (Ausschreibungsunterlagen).
+
+        Wird gestreamt statt komplett in den Speicher geladen: Vergabeunterlagen
+        koennen gross sein, und eine falsch verlinkte Datei darf den Lauf nicht
+        sprengen. Ueberschreitet die Antwort ``max_bytes``, wird abgebrochen und
+        die Teildatei entfernt - es bleibt nie eine halbe Datei liegen.
+        """
+        limit = self.config.max_download_bytes if max_bytes is None else max_bytes
+        should_check_robots = self.config.respect_robots if check_robots is None else check_robots
+        if should_check_robots and not await self.robots.allowed(url, self._fetch_robots):
+            raise RobotsDisallowedError(url)
+
+        host = urlsplit(url).netloc
+        await self.rate_limiter.acquire(host)
+        self.stats.requests += 1
+        self.stats.by_host[host] = self.stats.by_host.get(host, 0) + 1
+
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(response.content)
+        partial = destination.with_suffix(destination.suffix + ".part")
+        written = 0
+        try:
+            async with self._client.stream("GET", url) as response:
+                if response.status_code >= 400:
+                    self.stats.failures += 1
+                    raise HttpError(
+                        url, f"HTTP {response.status_code}", status_code=response.status_code
+                    )
+                content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+                if expected_types is not None and content_type not in expected_types:
+                    raise HttpError(
+                        url,
+                        f"Unerwarteter Content-Type '{content_type}' "
+                        f"(erwartet: {', '.join(sorted(expected_types))})",
+                    )
+                with partial.open("wb") as handle:
+                    async for chunk in response.aiter_bytes(65_536):
+                        written += len(chunk)
+                        if limit and written > limit:
+                            raise HttpError(
+                                url, f"Download ueberschreitet max_download_bytes ({limit} Bytes)"
+                            )
+                        handle.write(chunk)
+        except httpx.HTTPError as exc:
+            partial.unlink(missing_ok=True)
+            self.stats.failures += 1
+            raise HttpError(url, f"Download fehlgeschlagen: {exc}") from exc
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+
+        self.stats.bytes_downloaded += written
+        partial.replace(destination)
         return destination
 
 

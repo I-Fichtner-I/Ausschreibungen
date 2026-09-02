@@ -58,3 +58,59 @@ def test_empty_key_counts_as_missing(project_dir: Path):
     (project_dir / ".env").write_text("TENDER_AI_TED_API_KEY=\n", encoding="utf-8")
     settings = load_settings(project_dir / "config.yaml")
     assert settings.secret_for_source("ted") is None
+
+
+# --- T-23: typisierte Quellkonfigurationen -------------------------------------
+def test_known_source_types_get_their_config_class(project_dir: Path):
+    from tender_ai.config import RssSourceConfig, TedSourceConfig
+
+    settings = load_settings(project_dir / "config.yaml")
+    assert isinstance(settings.sources["ted"], TedSourceConfig)
+    assert isinstance(settings.sources["foo"], RssSourceConfig)
+    assert settings.sources["ted"].page_size == 50  # Default aus der Klasse
+
+
+def test_typo_in_known_source_is_rejected(project_dir: Path):
+    """Ein Tippfehler faellt beim Start auf, statt still zum Default zu fuehren."""
+    (project_dir / "config.yaml").write_text(
+        yaml.safe_dump({"sources": {"ted": {"type": "ted", "page_sze": 10}}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(Exception, match="page_sze"):
+        load_settings(project_dir / "config.yaml")
+
+
+def test_unknown_source_type_stays_tolerant(project_dir: Path):
+    """Eine unbekannte Quelle darf nicht die ganze Konfiguration ungueltig machen."""
+    from tender_ai.config import UnknownSourceConfig
+
+    (project_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {"sources": {"exotisch": {"type": "gibtsnicht", "irgendwas": 1, "priority": 5}}}
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(project_dir / "config.yaml")
+    source = settings.sources["exotisch"]
+    assert isinstance(source, UnknownSourceConfig)
+    assert source.priority == 5
+
+
+def test_feed_entries_are_validated(project_dir: Path):
+    (project_dir / "config.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "sources": {
+                    "feed": {
+                        "type": "rss",
+                        "feeds": [{"url": "https://x.invalid/f.xml", "country": "DEU"}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(project_dir / "config.yaml")
+    feed = settings.sources["feed"].feeds[0]
+    assert feed.url == "https://x.invalid/f.xml"
+    assert feed.name is None and feed.country == "DEU"

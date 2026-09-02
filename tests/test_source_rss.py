@@ -209,3 +209,14 @@ async def test_entity_expansion_feed_does_not_explode(settings: Settings, http_c
         return
     for tender in results:
         assert len(tender.title or "") < 10_000
+
+
+@respx.mock
+async def test_oversized_feed_is_rejected_before_parsing(
+    settings: Settings, http_client: HttpClient
+):
+    """T-18: Uebergrosse Feeds werden gar nicht erst geparst."""
+    http_client.config.max_feed_bytes = 1000
+    respx.get(FEED_URL).mock(return_value=httpx.Response(200, text="<rss/>" + "x" * 2000))
+    with pytest.raises(SourceError, match="max_feed_bytes"):
+        await build_source(settings, http_client).search(SearchQuery(max_results=10))

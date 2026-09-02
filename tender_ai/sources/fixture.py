@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..config import FixtureSourceConfig
 from ..core.errors import SourceError
 from ..models.tender import Tender, make_tender_id
 from .base import SearchQuery, TenderSource
@@ -21,9 +22,11 @@ from .registry import register_source
 class FixtureSource(TenderSource):
     type_name = "fixture"
 
+    config: FixtureSourceConfig
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.path = Path(str(getattr(self.config, "path", "data/fixtures/sample_tenders.json")))
+        self.path = Path(self.config.path)
 
     async def search(self, query: SearchQuery) -> list[Tender]:
         if not self.path.is_file():
