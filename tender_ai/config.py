@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -41,6 +41,11 @@ class HttpConfig(BaseModel):
     requests_per_second: float = 1.0
     cache_enabled: bool = True
     cache_ttl_seconds: int = 900
+    #: Obergrenze fuer einen einzelnen Dateidownload (Vergabeunterlagen).
+    max_download_bytes: int = 50_000_000
+    #: Obergrenze fuer eine Feed-Antwort - schuetzt den XML-Parser vor
+    #: uebergrossen oder aufgeblaehten Feeds.
+    max_feed_bytes: int = 5_000_000
 
 
 class SearchConfig(BaseModel):
@@ -53,14 +58,17 @@ class SearchConfig(BaseModel):
 
 
 class SourceConfig(BaseModel):
-    """Konfiguration einer einzelnen Quelle.
+    """Basis jeder Quellkonfiguration.
 
-    ``extra="allow"``: adapterspezifische Schluessel (z. B. ``feeds`` beim
-    RSS-Adapter) landen direkt im Objekt, ohne dass die Basisklasse jedes
-    Detail kennen muss.
+    Konkrete Adapter bringen eigene Unterklassen mit ihren Feldern mit und
+    registrieren sie ueber ``register_source_config``. Dadurch faellt ein
+    Tippfehler in config.yaml (``page_sze`` statt ``page_size``) beim Start auf,
+    statt still zum Default zu fuehren.
     """
 
-    model_config = ConfigDict(extra="allow")
+    # validate_assignment: auch spaeter gesetzte Werte werden geprueft und in
+    # die typisierten Modelle konvertiert (z. B. ein Feed-Dict zu FeedConfig).
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     enabled: bool = True
     type: str
@@ -71,10 +79,84 @@ class SourceConfig(BaseModel):
         return getattr(self, key, default) if hasattr(self, key) else default
 
 
+class UnknownSourceConfig(SourceConfig):
+    """Fallback fuer Quelltypen, die dieses Programm nicht kennt.
+
+    Bewusst tolerant (``extra="allow"``): eine unbekannte Quelle in config.yaml
+    soll beim Start gemeldet und uebersprungen werden - sie darf nicht die
+    gesamte Konfiguration ungueltig machen.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class TedSourceConfig(SourceConfig):
+    """Konfiguration des TED-Adapters (siehe ``tender_ai.sources.ted``)."""
+
+    base_url: str = "https://api.ted.europa.eu"
+    search_path: str = "/v3/notices/search"
+    page_size: int = 50
+    scope: str = "ALL"
+    auth_header: str = "Authorization"
+    auth_scheme: str = ""
+    fields: list[str] | None = None
+    query_fields: dict[str, str] | None = None
+    #: Praefix des eForms-``notice-type`` -> Status; leer = eingebaute Zuordnung.
+    status_map: dict[str, str] | None = None
+    #: Komplette Expert-Query selbst vorgeben (ueberschreibt den Query-Builder).
+    raw_query: str | None = None
+
+
+class FeedConfig(BaseModel):
+    """Ein einzelner RSS-/Atom-Feed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    name: str | None = None
+    country: str | None = None
+    #: Falls der Feed genau eine Vergabestelle abbildet.
+    authority: str | None = None
+
+
+class RssSourceConfig(SourceConfig):
+    feeds: list[FeedConfig] = Field(default_factory=list)
+
+
+class FixtureSourceConfig(SourceConfig):
+    path: str = "data/fixtures/sample_tenders.json"
+
+
+#: type -> Konfigurationsklasse. Adapter registrieren hier ihre Klasse.
+SOURCE_CONFIG_TYPES: dict[str, type[SourceConfig]] = {
+    "ted": TedSourceConfig,
+    "rss": RssSourceConfig,
+    "fixture": FixtureSourceConfig,
+}
+
+
+def register_source_config(type_name: str, config_cls: type[SourceConfig]) -> None:
+    """Konfigurationsklasse eines Adapters bekannt machen."""
+    SOURCE_CONFIG_TYPES[type_name] = config_cls
+
+
+def parse_source_config(name: str, value: Any) -> SourceConfig:
+    """Einen ``sources``-Eintrag mit der zu seinem ``type`` passenden Klasse lesen."""
+    if isinstance(value, SourceConfig):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError(f"sources.{name} muss ein Mapping sein, nicht {type(value).__name__}")
+    config_cls = SOURCE_CONFIG_TYPES.get(str(value.get("type", "")), UnknownSourceConfig)
+    return config_cls.model_validate(value)
+
+
 class DedupConfig(BaseModel):
     enabled: bool = True
     title_similarity_threshold: float = 0.90
     match_window_days: int = 21
+    #: Obergrenze fuer Kandidaten derselben Vergabestelle mit abweichendem
+    #: Titelanfang. Schuetzt Laeufe vor Behoerden mit sehr vielen Ausschreibungen.
+    max_authority_candidates: int = 200
 
 
 class CriteriaConfig(BaseModel):
@@ -154,6 +236,14 @@ class Settings(BaseSettings):
     source_api_keys: dict[str, SecretStr] = Field(default_factory=dict)
     #: Abwaertskompatibel: TENDER_AI_TED_API_KEY.
     ted_api_key: SecretStr | None = None
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def _parse_sources(cls, value: Any) -> Any:
+        """Jede Quelle mit der Klasse ihres ``type`` validieren."""
+        if not isinstance(value, dict):
+            return value
+        return {name: parse_source_config(name, entry) for name, entry in value.items()}
 
     @classmethod
     def settings_customise_sources(

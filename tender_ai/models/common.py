@@ -40,6 +40,10 @@ def display(value: Any, *, missing: str = UNKNOWN) -> str:
 
 _WS = re.compile(r"\s+")
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
+#: Tausendertrennzeichen innerhalb einer Zahl (2.000 / 2 000 -> 2000). Ohne das
+#: zerfaellt "2.000 Monitoren" zu "2 000 monitoren" und derselbe Auftrag landet
+#: je nach Schreibweise der Quelle in unterschiedlichen Vergleichsgruppen.
+_THOUSANDS = re.compile(r"(?<=\d)[.\u00a0 ](?=\d{3}(?!\d))")
 
 
 def normalize_text(value: str | None) -> str:
@@ -52,6 +56,7 @@ def normalize_text(value: str | None) -> str:
     text = text.replace("ß", "ss").replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = _THOUSANDS.sub("", text)
     text = _PUNCT.sub(" ", text)
     return _WS.sub(" ", text).strip()
 
@@ -79,3 +84,23 @@ class EstimatedValue(BaseModel):
     estimated: bool = False
     basis: str | None = None
     provenance: Provenance | None = None
+
+
+#: Laenge des Vergabestellen-Anteils im Blocking-Schluessel.
+BLOCKING_AUTHORITY_CHARS = 24
+#: Anzahl Titelwoerter im Blocking-Schluessel.
+BLOCKING_TITLE_WORDS = 3
+
+
+def blocking_key(title: str | None, authority: str | None) -> str:
+    """Grober Gruppenschluessel fuer die Dublettensuche.
+
+    Statt jeden neuen Datensatz mit hunderten Kandidaten zu vergleichen, werden
+    nur Datensaetze derselben Gruppe geprueft: normalisierte Vergabestelle plus
+    die ersten Titelwoerter. Der Schluessel ist absichtlich grob - er engt die
+    Kandidatenmenge ein, die Entscheidung faellt weiterhin der Aehnlichkeits-
+    vergleich in ``tender_ai.pipeline.dedup``.
+    """
+    authority_part = normalize_text(authority)[:BLOCKING_AUTHORITY_CHARS]
+    title_part = " ".join(normalize_text(title).split()[:BLOCKING_TITLE_WORDS])
+    return f"{authority_part}|{title_part}"

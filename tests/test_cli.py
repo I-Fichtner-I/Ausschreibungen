@@ -141,3 +141,65 @@ def test_db_upgrade_command(settings: Settings):
     result = runner.invoke(app, _args(settings, "db-upgrade"))
     assert result.exit_code == 0, result.output
     assert "bereits aktuell" in result.output
+
+
+def test_show_renders_lots_documents_aliases_and_changes(settings: Settings, tmp_path: Path):
+    """T-24: der Detailbefehl deckt alle Tabellenzweige ab."""
+    from datetime import UTC, datetime
+
+    from tender_ai.database.repository import TenderRepository
+    from tender_ai.database.session import session_scope
+    from tender_ai.models.tender import Tender, TenderDocument, TenderLot
+
+    base = dict(
+        title="Rahmenvertrag Bueroausstattung",
+        contracting_authority="Landkreis Beispiel",
+        national_id="VG-2026-42",
+        lots=[TenderLot(lot_id="1", title="Bueromoebel", estimated_value=90000.0)],
+        documents=[TenderDocument(name="LV", url="https://example.invalid/lv.pdf")],
+        notes=["Frist aus dem Feed-Text extrahiert"],
+    )
+    with session_scope(settings.database_url) as session:
+        repository = TenderRepository(
+            session, settings.dedup, source_priority={"ted": 10, "feed": 20}
+        )
+        repository.upsert(Tender(id="ted:x1", source="ted", source_id="x1", **base))
+        # zweite Quelle -> Alias; danach eine Aenderung -> Aenderungstabelle
+        repository.upsert(Tender(id="feed:x1", source="feed", source_id="x1", **base))
+        repository.upsert(
+            Tender(
+                id="ted:x1",
+                source="ted",
+                source_id="x1",
+                submission_deadline=datetime(2036, 12, 1, tzinfo=UTC),
+                **base,
+            )
+        )
+        session.commit()
+
+    result = runner.invoke(app, _args(settings, "show", "ted:x1"))
+    assert result.exit_code == 0, result.output
+    for expected in ("Lose", "Dokumente", "Weitere Fundstellen", "Aenderungen", "Hinweise"):
+        assert expected in result.output
+
+
+def test_export_xlsx_and_cache_clear(settings: Settings, tmp_path: Path):
+    runner.invoke(app, _args(settings, "search", "--source", "fixture"))
+
+    target = tmp_path / "export.xlsx"
+    result = runner.invoke(app, _args(settings, "export", str(target), "--format", "xlsx"))
+    assert result.exit_code == 0, result.output
+    assert target.is_file()
+
+    result = runner.invoke(app, _args(settings, "cache-clear"))
+    assert result.exit_code == 0
+    assert "geloescht" in result.output
+
+
+def test_list_orders_and_filters(settings: Settings):
+    runner.invoke(app, _args(settings, "search", "--source", "fixture"))
+    for order in ("deadline", "published", "value", "seen"):
+        result = runner.invoke(app, _args(settings, "list", "--order", order))
+        assert result.exit_code == 0, result.output
+    result = runner.invoke(app, _args(settings, "list", "--search", "aufzuege", "--json"))
+    assert len(json.loads(result.stdout)["tenders"]) == 1

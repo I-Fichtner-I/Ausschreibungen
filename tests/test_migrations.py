@@ -93,3 +93,32 @@ def test_foreign_keys_cascade_on_delete(tmp_path: Path):
         session.execute(text("DELETE FROM tenders WHERE id = 'a:1'"))
         session.commit()
         assert session.query(TenderAliasRecord).count() == 0
+
+
+def test_blocking_key_backfill(tmp_path: Path):
+    """0002 fuellt den Blocking-Schluessel fuer Bestandsdaten."""
+    from alembic import command
+
+    from tender_ai.database.migrations import alembic_config
+
+    url = _url(tmp_path, "backfill.db")
+    config = alembic_config(url)
+    command.upgrade(config, "0001_initial")
+
+    engine = get_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO tenders (id, fingerprint, source, source_id, content_hash, "
+                "title_normalized, authority_normalized, cpv_codes, payload, status, is_primary,"
+                " first_seen_at, last_seen_at, updated_at) VALUES "
+                "('a:1', 'f', 'a', '1', 'h', 'lieferung von 2000 monitoren', "
+                "'musterstadt zentrale vergabestelle', '[]', '{}', 'OPEN', 1, "
+                "'2026-01-01', '2026-01-01', '2026-01-01')"
+            )
+        )
+
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        key = connection.execute(text("SELECT blocking_key FROM tenders WHERE id='a:1'")).scalar()
+    assert key == "musterstadt zentrale ver|lieferung von 2000"

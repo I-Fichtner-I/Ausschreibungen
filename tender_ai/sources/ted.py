@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from ..config import TedSourceConfig
 from ..core.errors import SourceError
 from ..models.common import Provenance, utcnow
 from ..models.tender import (
@@ -79,23 +80,20 @@ class TedSource(TenderSource):
     type_name = "ted"
     is_official_api = True
 
+    config: TedSourceConfig
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.base_url = str(getattr(self.config, "base_url", "https://api.ted.europa.eu")).rstrip(
-            "/"
-        )
-        self.search_path = str(getattr(self.config, "search_path", "/v3/notices/search"))
-        self.page_size = int(getattr(self.config, "page_size", 50) or 50)
-        self.fields = list(getattr(self.config, "fields", None) or DEFAULT_FIELDS)
-        self.query_fields = {
-            **DEFAULT_QUERY_FIELDS,
-            **(getattr(self.config, "query_fields", None) or {}),
-        }
+        self.base_url = self.config.base_url.rstrip("/")
+        self.search_path = self.config.search_path
+        self.page_size = self.config.page_size or 50
+        self.fields = list(self.config.fields or DEFAULT_FIELDS)
+        self.query_fields = {**DEFAULT_QUERY_FIELDS, **(self.config.query_fields or {})}
         self.status_map: dict[str, str] = {
             str(k).lower(): str(v).upper()
-            for k, v in (getattr(self.config, "status_map", None) or DEFAULT_STATUS_MAP).items()
+            for k, v in (self.config.status_map or DEFAULT_STATUS_MAP).items()
         }
-        self.raw_query = getattr(self.config, "raw_query", None)
+        self.raw_query = self.config.raw_query
         self.api_key = self.settings.secret_for_source(self.name)
         self._register_rate_limit(self.base_url)
 
@@ -143,9 +141,8 @@ class TedSource(TenderSource):
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_key is not None:
-            header_name = str(getattr(self.config, "auth_header", "Authorization"))
-            scheme = str(getattr(self.config, "auth_scheme", "") or "").strip()
-            headers[header_name] = f"{scheme} {self.api_key.get_secret_value()}".strip()
+            scheme = self.config.auth_scheme.strip()
+            headers[self.config.auth_header] = f"{scheme} {self.api_key.get_secret_value()}".strip()
         return headers
 
     # --- Suche -------------------------------------------------------------
@@ -165,7 +162,7 @@ class TedSource(TenderSource):
                 "fields": self.fields,
                 "page": page,
                 "limit": limit,
-                "scope": str(getattr(self.config, "scope", "ALL")),
+                "scope": self.config.scope,
             }
             response = await self.http.post(
                 url,
@@ -246,6 +243,7 @@ class TedSource(TenderSource):
             target = safe_document_path(destination, tender.source, tender.source_id, suffix)
             try:
                 path = await self.http.download(document.url, target, check_robots=False)
+
             except Exception as exc:  # noqa: BLE001 - ein fehlgeschlagener Download stoppt nicht die uebrigen
                 self.log.warning("document_download_failed", url=document.url, error=str(exc))
                 document.note = f"Download fehlgeschlagen: {exc}"

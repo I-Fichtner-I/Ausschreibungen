@@ -224,3 +224,82 @@ def test_tighten_host_never_loosens():
     assert limiter.interval_for("h") == 4.0
     limiter.tighten_host("h", None)
     assert limiter.interval_for("h") == 4.0
+
+
+# --- T-18: Streaming-Download mit Groessenlimit ---------------------------------
+@respx.mock
+async def test_download_writes_file_and_counts_bytes(tmp_path: Path):
+    respx.get("https://files.test.invalid/lv.pdf").mock(
+        return_value=httpx.Response(200, content=b"%PDF-1.4 " + b"x" * 1000)
+    )
+    client = HttpClient(config())
+    try:
+        target = tmp_path / "docs" / "lv.pdf"
+        path = await client.download("https://files.test.invalid/lv.pdf", target)
+        assert path == target
+        assert target.read_bytes().startswith(b"%PDF-1.4")
+        assert client.stats.bytes_downloaded == 1009
+        assert list(tmp_path.glob("**/*.part")) == []
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_download_aborts_above_limit_without_leaving_partial(tmp_path: Path):
+    respx.get("https://files.test.invalid/gross.pdf").mock(
+        return_value=httpx.Response(200, content=b"x" * 200_000)
+    )
+    client = HttpClient(config())
+    try:
+        target = tmp_path / "gross.pdf"
+        with pytest.raises(HttpError, match="max_download_bytes"):
+            await client.download("https://files.test.invalid/gross.pdf", target, max_bytes=50_000)
+        assert not target.exists()
+        assert list(tmp_path.glob("**/*.part")) == []
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_download_checks_content_type(tmp_path: Path):
+    respx.get("https://files.test.invalid/seite.html").mock(
+        return_value=httpx.Response(200, content=b"<html>", headers={"Content-Type": "text/html"})
+    )
+    client = HttpClient(config())
+    try:
+        with pytest.raises(HttpError, match="Content-Type"):
+            await client.download(
+                "https://files.test.invalid/seite.html",
+                tmp_path / "x.pdf",
+                expected_types={"application/pdf"},
+            )
+        assert list(tmp_path.glob("**/*")) == []
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_download_respects_robots(tmp_path: Path):
+    respx.get("https://files.test.invalid/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nDisallow: /")
+    )
+    file_route = respx.get("https://files.test.invalid/lv.pdf")
+    client = HttpClient(config(respect_robots=True))
+    try:
+        with pytest.raises(RobotsDisallowedError):
+            await client.download("https://files.test.invalid/lv.pdf", tmp_path / "lv.pdf")
+        assert file_route.call_count == 0
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_download_error_status_leaves_no_file(tmp_path: Path):
+    respx.get("https://files.test.invalid/fehlt.pdf").mock(return_value=httpx.Response(404))
+    client = HttpClient(config())
+    try:
+        with pytest.raises(HttpError):
+            await client.download("https://files.test.invalid/fehlt.pdf", tmp_path / "f.pdf")
+        assert list(tmp_path.glob("**/*")) == []
+    finally:
+        await client.aclose()

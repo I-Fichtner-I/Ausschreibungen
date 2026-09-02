@@ -18,6 +18,7 @@ from typing import Any
 
 import feedparser
 
+from ..config import FeedConfig, RssSourceConfig
 from ..core.errors import HttpError, RobotsDisallowedError, SourceError
 from ..models.common import Provenance
 from ..models.tender import Tender, TenderStatus, make_tender_id
@@ -55,11 +56,13 @@ _KIND_LABELS = {
 class RssSource(TenderSource):
     type_name = "rss"
 
+    config: RssSourceConfig
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.feeds: list[dict[str, Any]] = list(getattr(self.config, "feeds", None) or [])
+        self.feeds: list[FeedConfig] = list(self.config.feeds)
         for feed in self.feeds:
-            self._register_rate_limit(str(feed.get("url", "")))
+            self._register_rate_limit(feed.url)
 
     async def search(self, query: SearchQuery) -> list[Tender]:
         results: list[Tender] = []
@@ -67,7 +70,7 @@ class RssSource(TenderSource):
         usable_feeds = 0
 
         for feed in self.feeds:
-            url = str(feed.get("url", "")).strip()
+            url = feed.url.strip()
             if not url:
                 continue
             usable_feeds += 1
@@ -110,8 +113,8 @@ class RssSource(TenderSource):
         total = 0
         reachable = 0
         for feed in self.feeds:
-            url = str(feed.get("url", "")).strip()
-            name = str(feed.get("name") or url)
+            url = feed.url.strip()
+            name = feed.name or url
             if not url:
                 messages.append(f"{name}: keine URL konfiguriert")
                 continue
@@ -132,14 +135,23 @@ class RssSource(TenderSource):
             duration_seconds=time.perf_counter() - started,
         )
 
-    async def _fetch_feed(self, feed: dict[str, Any], url: str) -> list[Tender]:
+    async def _fetch_feed(self, feed: FeedConfig, url: str) -> list[Tender]:
         response = await self.http.get(url)
+        limit = self.http.config.max_feed_bytes
+        if limit and len(response.content) > limit:
+            # Uebergrosse Feeds gar nicht erst parsen: der XML-Parser waere die
+            # Stelle, an der ein aufgeblaehter Feed teuer wird.
+            raise SourceError(
+                self.name,
+                f"{url}: Feed ist groesser als max_feed_bytes ({limit} Bytes) "
+                f"und wird nicht geparst",
+            )
         parsed = feedparser.parse(response.content)
         if parsed.bozo and not parsed.entries:
             raise HttpError(url, f"Feed nicht parsebar: {parsed.bozo_exception}")
-        feed_name = str(feed.get("name") or url)
-        country = feed.get("country")
-        authority = feed.get("authority")
+        feed_name = feed.name or url
+        country = feed.country
+        authority = feed.authority
         return [
             self._to_tender(entry, url, feed_name, country, authority) for entry in parsed.entries
         ]

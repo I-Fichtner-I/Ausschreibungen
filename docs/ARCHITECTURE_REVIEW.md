@@ -437,6 +437,11 @@ core/cache.py                    55          11        80%
 Upserts, die in Stufe 2 (Fingerprint, indiziert) treffen, liegen konstant bei
 ~2,3 ms.
 
+**Nach T-10** (Blocking-Schluessel, indiziert): 2,2 ms je Upsert bei 1000
+fremdquelligen Kandidaten - Faktor 25. Der Messwert wird als Test
+(`tests/test_dedup_scaling.py`, Marker `slow`) gegen eine Obergrenze von 5 ms
+geprueft, damit die Regression auffaellt.
+
 ### H.3 Reproduktion F-01
 
 Quelle liefert `two:ok` und `two:bad`; `upsert` wirft fuer `bad`. Ergebnis:

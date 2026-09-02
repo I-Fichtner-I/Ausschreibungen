@@ -17,6 +17,8 @@ http:
   requests_per_second: 1.0      # globales Default-Rate-Limit pro Host
   cache_enabled: true
   cache_ttl_seconds: 900        # HTTP-Response-Cache (Entwicklung/Wiederholläufe)
+  max_download_bytes: 50000000  # Obergrenze je Dokumentdownload (50 MB)
+  max_feed_bytes: 5000000       # Obergrenze je Feed-Antwort (5 MB)
 
 # --- Suche (Default-Filter, per CLI ueberschreibbar) -------------------------
 search:
@@ -96,6 +98,7 @@ dedup:
   enabled: true
   title_similarity_threshold: 0.90   # 0..1, fuer den Fallback-Titelvergleich
   match_window_days: 21              # max. Abstand der Veroeffentlichungsdaten
+  max_authority_candidates: 200      # Kandidaten je Vergabestelle ausserhalb der Blocking-Gruppe
 
 # --- Mindestkriterien (ab Stufe 4 wirksam, hier bereits vorbereitet) ---------
 criteria:

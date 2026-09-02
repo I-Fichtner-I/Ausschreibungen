@@ -98,6 +98,11 @@ deaktiviert ist - praktisch fuer die Offline-Fixture.
 Reihenfolge: Umgebungsvariablen (`TENDER_AI_`, verschachtelt mit `__`) schlagen
 `.env`, `.env` schlaegt `config.yaml`.
 
+Die Konfiguration jeder Quelle wird gegen die Klasse ihres `type` geprueft: ein
+Tippfehler (`page_sze` statt `page_size`) faellt beim Start auf. Ein unbekannter
+`type` macht die Konfiguration dagegen nicht ungueltig - die Quelle wird
+gemeldet und uebersprungen.
+
 Neue Quelle aktivieren, Beispiel RSS-Feed eines Landesportals:
 
 ```yaml
@@ -218,6 +223,7 @@ tender_ai/
 ├── core/                  HTTP (Retry/Backoff/Rate-Limit/Cache), robots.txt, Logging, Fehler
 ├── models/                Tender, TenderLot, TenderDocument, Provenance, …
 ├── sources/               base.py, registry.py, ted.py, rss.py, fixture.py, parsing.py
+├── services/              run_search, check_sources - genutzt von CLI und Dashboard
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
 ├── database/              SQLAlchemy-Modelle, Session, Repository, Alembic-Migrationen
 └── export/                JSON / CSV / XLSX

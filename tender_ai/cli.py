@@ -26,7 +26,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .config import Settings, load_settings
-from .core.http import build_http_client
+from .core.errors import ConfigError
 from .core.logging import configure_logging, get_logger
 from .database.migrations import current_revision, ensure_current_schema, head_revision
 from .database.repository import TenderRepository
@@ -34,8 +34,9 @@ from .database.session import session_scope
 from .export.exporters import EXPORT_FORMATS, export_tenders
 from .models.common import display as _display
 from .models.tender import Tender
+from .services import check_sources, run_search
 from .sources.base import SearchQuery
-from .sources.registry import available_types, build_sources
+from .sources.registry import available_types
 
 app = typer.Typer(
     add_completion=False,
@@ -208,19 +209,8 @@ def doctor(
 ) -> None:
     """Erreichbarkeit und Parsing der Quellen pruefen (Probeabruf)."""
     settings = _settings(config)
+    results = [status.as_dict() for status in asyncio.run(check_sources(settings, source))]
 
-    async def _run() -> list[dict[str, Any]]:
-        http = build_http_client(settings.http, settings.cache_dir)
-        try:
-            configured = build_sources(settings, http, only=source, include_disabled=True)
-            if not configured:
-                return []
-            statuses = await asyncio.gather(*(s.health_check() for s in configured))
-            return [status.as_dict() for status in statuses]
-        finally:
-            await http.aclose()
-
-    results = asyncio.run(_run())
     if json_output:
         console.print_json(jsonlib.dumps(results, ensure_ascii=False))
         raise typer.Exit(0 if all(r["ok"] for r in results) else 1)
@@ -277,28 +267,19 @@ def search(
     settings = _settings(config)
     query = _query_from_options(settings, keyword, cpv, country, days, min_deadline_days, limit)
 
-    async def _run(session: Any) -> Any:
-        http = build_http_client(settings.http, settings.cache_dir)
-        try:
-            configured = build_sources(settings, http, only=source)
-            if not configured:
-                console.print(
-                    "[red]Keine aktive Quelle gefunden.[/red] Pruefe config.yaml "
-                    "(sources.<name>.enabled) oder --source."
-                )
-                raise typer.Exit(1)
-            from .pipeline.ingest import IngestService
-
-            service = IngestService(settings, configured, http, session=session)
-            return await service.run(query, store=store, download_documents=download_docs)
-        finally:
-            await http.aclose()
-
-    if store:
-        with session_scope(settings.database_url) as session:
-            report = asyncio.run(_run(session))
-    else:
-        report = asyncio.run(_run(None))
+    try:
+        report = asyncio.run(
+            run_search(
+                settings,
+                query,
+                only_sources=source,
+                store=store,
+                download_documents=download_docs,
+            )
+        )
+    except ConfigError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
 
     if json_output:
         payload = report.as_dict()

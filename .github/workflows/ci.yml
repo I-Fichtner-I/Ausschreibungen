@@ -49,7 +49,7 @@ jobs:
         run: mypy tender_ai
 
       - name: Tests mit Coverage
-        run: pytest -q --cov=tender_ai --cov-report=term-missing --cov-fail-under=80
+        run: pytest -q --cov=tender_ai --cov-report=term-missing --cov-fail-under=85
 
       - name: Dependency-Audit (pip-audit)
         # Braucht Netzzugang zu OSV/PyPI; ein Ausfall des Dienstes soll den

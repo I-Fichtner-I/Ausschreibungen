@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import DedupConfig
-from ..models.common import normalize_text, utcnow
+from ..models.common import blocking_key, normalize_text, utcnow
 from ..models.tender import Tender, TenderStatus
 from ..pipeline.dedup import DuplicateDetector, DuplicateMatch
 from .models import (
@@ -109,6 +109,7 @@ class TenderRepository:
             title_normalized=normalize_text(tender.title),
             contracting_authority=tender.contracting_authority,
             authority_normalized=normalize_text(tender.contracting_authority),
+            blocking_key=blocking_key(tender.title, tender.contracting_authority),
             description=tender.description,
             country=tender.country,
             region=tender.region,
@@ -170,6 +171,7 @@ class TenderRepository:
         record.title_normalized = normalize_text(tender.title)
         record.contracting_authority = tender.contracting_authority
         record.authority_normalized = normalize_text(tender.contracting_authority)
+        record.blocking_key = blocking_key(tender.title, tender.contracting_authority)
         record.description = tender.description
         record.country = tender.country
         record.region = tender.region
