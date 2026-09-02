@@ -96,6 +96,9 @@ class TenderRecord(Base):
     changes: Mapped[list[TenderChangeRecord]] = relationship(
         back_populates="tender", cascade="all, delete-orphan"
     )
+    risk_analysis: Mapped[RiskAnalysisRecord | None] = relationship(
+        back_populates="tender", cascade="all, delete-orphan", uselist=False
+    )
 
     __table_args__ = (Index("ix_tenders_source_source_id", "source", "source_id", unique=True),)
 
@@ -197,6 +200,35 @@ class TenderChangeRecord(Base):
     source: Mapped[str | None] = mapped_column(String(64), default=None)
 
     tender: Mapped[TenderRecord] = relationship(back_populates="changes")
+
+
+class RiskAnalysisRecord(Base):
+    """Risikobewertung einer Ausschreibung (Stufe 2B).
+
+    Je Ausschreibung wird die jeweils aktuelle Bewertung gehalten; die Faktoren
+    liegen als JSON bei, damit die Begruendung erhalten bleibt und nicht aus
+    dem Score zurueckgerechnet werden muss.
+    """
+
+    __tablename__ = "risk_analyses"
+
+    tender_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tenders.id", ondelete="CASCADE"), primary_key=True
+    )
+    score: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    level: Mapped[str] = mapped_column(String(16), default="LOW", index=True)
+    factors: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    findings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    documents_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    documents_unreadable: Mapped[int] = mapped_column(Integer, default=0)
+    characters_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    #: Inhalts-Hash der Ausschreibung zum Bewertungszeitpunkt. Nur wenn er sich
+    #: aendert, ist eine Neubewertung noetig - ``updated_at`` taugt dafuer
+    #: nicht, weil die Analyse selbst den Datensatz schreibt.
+    content_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    tender: Mapped[TenderRecord] = relationship(back_populates="risk_analysis")
 
 
 class IngestRunRecord(Base):

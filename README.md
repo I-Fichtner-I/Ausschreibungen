@@ -10,10 +10,12 @@ testbar, bevor die naechste beginnt.
 > Quell-Adapter (TED, RSS-Portale, Offline-Fixture), einheitliches Datenmodell,
 > Dublettenerkennung, Speicherung, Aenderungserkennung, Export und CLI.
 >
-> **Stufe 2 ist begonnen: Vergabeunterlagen beschaffen und auslesen.**
-> `tender-ai documents <id>` laedt die frei zugaenglichen Unterlagen einer
-> Ausschreibung und extrahiert Text und Tabellen aus PDF, DOCX, XLSX, HTML und
-> CSV. Anforderungserkennung und Risiko-Score folgen als naechstes.
+> **Stufe 2 ist fertig: Ausschreibungen analysieren.**
+> `tender-ai documents <id>` laedt die frei zugaenglichen Unterlagen und
+> extrahiert Text und Tabellen aus PDF, DOCX, XLSX, HTML und CSV.
+> `tender-ai analyze <id>` erkennt daraus Anforderungen (Zertifikate,
+> Mindestanforderungen, Zahlungs- und Lieferbedingungen, Zuschlagskriterien,
+> Herstellerbindung) und berechnet einen begruendeten Risiko-Score.
 >
 > Die Stufen 3-6 (Artikelextraktion, Preisrecherche, Kalkulation, Scoring,
 > Dashboard) folgen danach - siehe [docs/architecture.md](docs/architecture.md).
@@ -61,7 +63,24 @@ Nur Dokumente mit `access = PUBLIC` werden abgerufen. Geschuetzte Unterlagen
 (Login, Captcha, Paywall) werden uebersprungen und in der Ausgabe als
 "nicht oeffentlich" ausgewiesen - sie werden nicht umgangen.
 
-### 4. Echte Recherche
+### 4. Anforderungen und Risiko bewerten (Stufe 2)
+
+```bash
+tender-ai analyze ted:00123456-2026             # laedt fehlende Unterlagen mit
+tender-ai analyze ted:00123456-2026 --findings  # jede Fundstelle mit Beleg
+tender-ai analyze --all -n 50                   # Stapellauf, z. B. per cron
+```
+
+Der Risiko-Score ist additiv und **erklaerbar**: jeder Faktor nennt seine
+Punkte, eine Begruendung und den Satz aus dem Dokument, auf dem er beruht.
+`tender-ai list` und `tender-ai show` zeigen die Bewertung danach mit an.
+
+Wichtig: **Fehlende Information senkt das Risiko nicht.** Fehlen Frist,
+Volumen oder auswertbare Unterlagen, erzeugt genau das eigene Faktoren - eine
+unbekannte Ausschreibung soll nicht unauffaellig wirken. Die Auswertung ist
+regelbasiert: jeder Hinweis ist ein Fund im Text, keine Rechtsauskunft.
+
+### 5. Echte Recherche
 
 ```bash
 # EU-weit (TED) nach Monitoren, veroeffentlicht in den letzten 14 Tagen
@@ -90,6 +109,8 @@ tender-ai runs                              # Laufprotokoll + Quellenstatus
 | `tender-ai list [--open] [--search TEXT]` | gespeicherte Ausschreibungen |
 | `tender-ai show <id>` | Details, Dokumente, Dubletten, Aenderungen |
 | `tender-ai documents <id>` | Vergabeunterlagen laden und auslesen (Stufe 2) |
+| `tender-ai analyze <id> [--findings]` | Anforderungen erkennen, Risiko bewerten |
+| `tender-ai analyze --all [-n N]` | alle laufenden Ausschreibungen bewerten |
 | `tender-ai export <datei>` | JSON / CSV / XLSX |
 | `tender-ai runs` | letzte Laeufe und Quellenstatus |
 | `tender-ai cache-clear` | HTTP-Cache leeren |
@@ -156,7 +177,11 @@ takten sind:
 
 ```cron
 0 6 * * * cd /pfad/zum/projekt && .venv/bin/tender-ai search --days 2 >> data/cron.log 2>&1
+30 6 * * * cd /pfad/zum/projekt && .venv/bin/tender-ai analyze --all >> data/cron.log 2>&1
 ```
+
+Der Analyselauf ueberspringt Ausschreibungen, die sich seit ihrer letzten
+Bewertung nicht geaendert haben (Vergleich ueber den Inhalts-Hash).
 
 Jeder Lauf erkennt neue Ausschreibungen, aktualisiert bekannte und
 protokolliert Aenderungen (Frist, Volumen, Status, Dokumente) in
@@ -241,6 +266,7 @@ tender_ai/
 ├── sources/               base.py, registry.py, ted.py, rss.py, fixture.py, parsing.py
 ├── services/              run_search, check_sources, fetch_documents
 ├── extraction/            PDF, DOCX, XLSX, HTML, Text/CSV -> Seiten und Tabellen
+├── analysis/              Anforderungserkennung (Regeln) und Risiko-Score
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
 ├── database/              SQLAlchemy-Modelle, Session, Repository, Alembic-Migrationen
 └── export/                JSON / CSV / XLSX

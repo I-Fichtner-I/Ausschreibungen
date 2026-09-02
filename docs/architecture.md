@@ -23,7 +23,7 @@ Stufe ein echter Zwischenstand vorhanden statt eines halbfertigen Ganzen.
 | Stufe | Inhalt | Status |
 |-------|--------|--------|
 | **1** | **Ausschreibungen recherchieren** - Quell-Adapter, einheitliches Datenmodell, Dubletten, Speicherung, Aenderungserkennung, Export, CLI | **fertig, testbar** |
-| **2** | **Ausschreibung analysieren** - Dokumentendownload und Textextraktion (PDF/DOCX/XLSX/HTML/CSV) **fertig**; Anforderungen und Risiko-Score offen | teilweise fertig |
+| **2** | **Ausschreibung analysieren** - Dokumentendownload, Textextraktion (PDF/DOCX/XLSX/HTML/CSV), Anforderungserkennung und begruendeter Risiko-Score | **fertig, testbar** |
 | 3 | Artikel extrahieren - Tabellenerkennung, `TenderItem`, Match-Confidence | offen |
 | 4 | Produkt-Matching und Preisrecherche - Lieferanten, `PriceOffer`, Preisstatistik | offen |
 | 5 | Kosten, Profitabilitaet, Szenarien, Score, Entscheidungsvorlage | offen |
@@ -106,7 +106,9 @@ umgangen), `TenderRequirements` (ab Stufe 2 gefuellt), `Provenance`,
 (Laufprotokoll), `source_states` (Quellenstatus, Fehler in Folge).
 
 Seit Stufe 2: `document_extracts` (Text, Tabellen und Metadaten je Unterlage,
-1:1 zum Dokument - der Text bleibt aus den Listenabfragen heraus).
+1:1 zum Dokument - der Text bleibt aus den Listenabfragen heraus) und
+`risk_analyses` (Score, Stufe, begruendete Faktoren und Funde je Ausschreibung;
+der mitgespeicherte `content_hash` verhindert unnoetige Neubewertungen).
 
 Geplant ab Stufe 3: `tender_items`, `suppliers`, `price_offers`,
 `cost_calculations`, `profitability_analyses`, `risk_analyses`,
@@ -150,6 +152,7 @@ Die Pipeline muss dafuer nicht angefasst werden.
 | **Dubletten ueber Portale hinweg** | Dreistufige Erkennung; unterhalb der Schwelle wird bewusst nicht zusammengefuehrt. Primaerquelle nach konfigurierter Prioritaet. |
 | **Ausfall einer Quelle** | Jede Quelle ist gekapselt; Fehler landen im Lauf-Report und in `source_states`, der Lauf laeuft weiter. |
 | **Rate-Limits / Sperren** | Rate-Limit pro Host, robots.txt inkl. `Crawl-delay`, Exponential Backoff mit Jitter, `Retry-After` wird beachtet, Cache gegen unnoetige Wiederholungen. |
+| **Scheingenauigkeit beim Risiko-Score** | Der Score ist additiv und jeder Faktor nennt Punkte, Begruendung und Beleg aus dem Dokument. Fehlende Information senkt den Score nie, sondern erzeugt eigene Faktoren (`deadline_unknown`, `value_unknown`, `documents_missing`) - eine unbekannte Ausschreibung darf nicht unauffaellig wirken. |
 | **Falsche Produktzuordnung** (ab Stufe 3) | `match_confidence`; unterhalb der Schwelle keine Zuordnung, sondern `REQUIRES_REVIEW`. |
 
 ---

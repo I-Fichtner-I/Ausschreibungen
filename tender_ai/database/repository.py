@@ -17,6 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import DedupConfig
+from ..models.analysis import AnalysisResult
 from ..models.common import blocking_key, normalize_text, utcnow
 from ..models.document import ExtractedDocument
 from ..models.tender import Tender, TenderDocument, TenderStatus
@@ -24,6 +25,7 @@ from ..pipeline.dedup import DuplicateDetector, DuplicateMatch
 from .models import (
     DocumentExtractRecord,
     IngestRunRecord,
+    RiskAnalysisRecord,
     SourceStateRecord,
     TenderAliasRecord,
     TenderChangeRecord,
@@ -393,6 +395,36 @@ class TenderRepository:
                 .order_by(DocumentExtractRecord.id)
             )
         )
+
+    def save_risk(
+        self, result: AnalysisResult, tender_record: TenderRecord | None = None
+    ) -> RiskAnalysisRecord:
+        """Aktuelle Risikobewertung samt Begruendung speichern."""
+        record = self.session.get(RiskAnalysisRecord, result.tender_id)
+        if record is None:
+            record = RiskAnalysisRecord(tender_id=result.tender_id)
+            self.session.add(record)
+        if tender_record is not None:
+            record.content_hash = tender_record.content_hash
+        risk = result.risk
+        record.score = risk.score
+        record.level = str(risk.level)
+        record.factors = _json_ready([factor.as_dict() for factor in risk.top_factors])
+        record.findings = _json_ready(result.as_dict()["findings"])
+        record.documents_analyzed = risk.documents_analyzed
+        record.documents_unreadable = risk.documents_unreadable
+        record.characters_analyzed = risk.characters_analyzed
+        record.computed_at = risk.computed_at
+        self.session.flush()
+        return record
+
+    def risk_for(self, tender_id: str) -> RiskAnalysisRecord | None:
+        return self.session.get(RiskAnalysisRecord, tender_id)
+
+    def save_requirements(self, record: TenderRecord, tender: Tender) -> None:
+        """Erkannte Anforderungen im Tender-Payload festhalten."""
+        record.payload = _json_ready(tender.model_dump(mode="json"))
+        self.session.flush()
 
     def changes_for(self, tender_id: str, limit: int = 50) -> list[TenderChangeRecord]:
         """Aenderungen genau dieser Ausschreibung - direkt per Query, nicht gefiltert."""
