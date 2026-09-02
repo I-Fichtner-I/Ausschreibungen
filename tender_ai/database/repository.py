@@ -336,6 +336,17 @@ class TenderRepository:
             )
         )
 
+    def changes_for(self, tender_id: str, limit: int = 50) -> list[TenderChangeRecord]:
+        """Aenderungen genau dieser Ausschreibung - direkt per Query, nicht gefiltert."""
+        return list(
+            self.session.scalars(
+                select(TenderChangeRecord)
+                .where(TenderChangeRecord.tender_id == tender_id)
+                .order_by(TenderChangeRecord.detected_at.desc())
+                .limit(limit)
+            )
+        )
+
     def aliases_for(self, tender_id: str) -> list[TenderAliasRecord]:
         return list(
             self.session.scalars(

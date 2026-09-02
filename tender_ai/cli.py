@@ -21,16 +21,18 @@ from typing import Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
 from .config import Settings, load_settings
 from .core.http import build_http_client
 from .core.logging import configure_logging, get_logger
+from .database.migrations import current_revision, ensure_current_schema, head_revision
 from .database.repository import TenderRepository
-from .database.session import create_all, session_scope
+from .database.session import session_scope
 from .export.exporters import EXPORT_FORMATS, export_tenders
-from .models.common import display
+from .models.common import display as _display
 from .models.tender import Tender
 from .sources.base import SearchQuery
 from .sources.registry import available_types, build_sources
@@ -50,6 +52,16 @@ def _settings(config: Path | None = None) -> Settings:
     configure_logging(settings.logging.level, settings.logging.format)
     settings.ensure_directories()
     return settings
+
+
+def _safe(value: Any, *, missing: str = "UNKNOWN") -> str:
+    """Fremddaten fuer die Terminalausgabe rendern.
+
+    ``rich`` interpretiert eckige Klammern als Markup - ein Ausschreibungstitel
+    wie ``[bold red]...[/]`` wuerde sonst die Ausgabe umfaerben oder Links
+    einschleusen. Deshalb wird jeder Wert aus einer Quelle escaped.
+    """
+    return escape(_display(value, missing=missing))
 
 
 def _query_from_options(
@@ -90,7 +102,7 @@ def _tender_table(tenders: list[Tender], title: str = "Ausschreibungen") -> Tabl
     table.add_column("Volumen", justify="right", no_wrap=True)
     for tender in tenders:
         days_left = tender.days_until_deadline
-        days_text = display(days_left)
+        days_text = _safe(days_left)
         style = ""
         if isinstance(days_left, int):
             style = "red" if days_left < 3 else ("yellow" if days_left < 10 else "green")
@@ -100,11 +112,11 @@ def _tender_table(tenders: list[Tender], title: str = "Ausschreibungen") -> Tabl
             else "UNKNOWN"
         )
         table.add_row(
-            tender.source,
-            tender.source_id[:22],
-            display(tender.title),
-            display(tender.contracting_authority),
-            display(tender.submission_deadline),
+            escape(tender.source),
+            escape(tender.source_id[:22]),
+            _safe(tender.title),
+            _safe(tender.contracting_authority),
+            _safe(tender.submission_deadline),
             f"[{style}]{days_text}[/{style}]" if style else days_text,
             value,
         )
@@ -125,8 +137,8 @@ def _print_source_reports(report: Any) -> None:
     for source_report in report.sources:
         failed = str(source_report.failed)
         table.add_row(
-            source_report.name,
-            source_report.type,
+            escape(source_report.name),
+            escape(source_report.type),
             "[green]OK[/green]" if source_report.ok else "[red]FEHLER[/red]",
             str(source_report.found),
             str(source_report.new),
@@ -137,10 +149,10 @@ def _print_source_reports(report: Any) -> None:
         )
     console.print(table)
     for error in report.errors:
-        where = error["source"]
+        where = escape(str(error["source"]))
         if error.get("tender_id"):
-            where = f"{where}, Datensatz {error['tender_id']}"
-        console.print(f"[red]Fehler in Quelle '{where}':[/red] {error['error']}")
+            where = f"{where}, Datensatz {escape(str(error['tender_id']))}"
+        console.print(f"[red]Fehler in Quelle '{where}':[/red] {escape(str(error['error']))}")
 
 
 # --- Kommandos ---------------------------------------------------------------
@@ -148,11 +160,12 @@ def _print_source_reports(report: Any) -> None:
 def init(config: Path | None = typer.Option(None, "--config", help="Pfad zu config.yaml")) -> None:
     """Verzeichnisse anlegen, Datenbankschema erzeugen, Konfiguration pruefen."""
     settings = _settings(config)
-    create_all(settings.database_url)
+    revision = ensure_current_schema(settings.database_url)
     console.print(
         Panel.fit(
             f"Datenverzeichnis: {settings.data_dir}\n"
             f"Datenbank:        {settings.database_url}\n"
+            f"Schema-Revision:  {revision}\n"
             f"Quellen aktiv:    {', '.join(settings.enabled_sources()) or 'keine'}\n"
             f"Quelltypen:       {', '.join(available_types())}",
             title="tender-ai bereit",
@@ -177,11 +190,11 @@ def sources(config: Path | None = typer.Option(None, "--config")) -> None:
     table.add_column("Rate (req/s)", justify="right")
     for name, source_config in sorted(settings.sources.items(), key=lambda item: item[1].priority):
         table.add_row(
-            name,
-            source_config.type,
+            escape(name),
+            escape(source_config.type),
             "[green]ja[/green]" if source_config.enabled else "[dim]nein[/dim]",
             str(source_config.priority),
-            display(source_config.requests_per_second or settings.http.requests_per_second),
+            _safe(source_config.requests_per_second or settings.http.requests_per_second),
         )
     console.print(table)
     console.print(f"Verfuegbare Quelltypen: {', '.join(available_types())}")
@@ -224,10 +237,10 @@ def doctor(
     table.add_column("Dauer (s)", justify="right")
     for result in results:
         table.add_row(
-            result["name"],
-            result["type"],
+            escape(str(result["name"])),
+            escape(str(result["type"])),
             "[green]OK[/green]" if result["ok"] else "[red]FEHLER[/red]",
-            result["message"],
+            escape(str(result["message"])),
             str(result["duration_seconds"]),
         )
     console.print(table)
@@ -370,9 +383,7 @@ def show(
             raise typer.Exit(1)
         tender = TenderRepository.to_tender(record)
         aliases = repository.aliases_for(record.id)
-        changes = [
-            change for change in repository.recent_changes(200) if change.tender_id == record.id
-        ]
+        changes = repository.changes_for(record.id, limit=50)
 
     if json_output:
         console.print_json(
@@ -382,31 +393,31 @@ def show(
 
     body = "\n".join(
         [
-            f"[bold]{display(tender.title)}[/bold]",
+            f"[bold]{_safe(tender.title)}[/bold]",
             "",
-            f"Vergabestelle:  {display(tender.contracting_authority)}",
-            f"Quelle:         {tender.source} ({display(tender.source_url)})",
-            f"Amtliche Nr.:   {display(tender.national_id)}",
-            f"Land/Region:    {display(tender.country)} / {display(tender.region)}",
-            f"CPV:            {display(tender.cpv_codes)}",
-            f"Veroeffentlicht:{display(tender.publication_date)}",
+            f"Vergabestelle:  {_safe(tender.contracting_authority)}",
+            f"Quelle:         {tender.source} ({_safe(tender.source_url)})",
+            f"Amtliche Nr.:   {_safe(tender.national_id)}",
+            f"Land/Region:    {_safe(tender.country)} / {_safe(tender.region)}",
+            f"CPV:            {_safe(tender.cpv_codes)}",
+            f"Veroeffentlicht:{_safe(tender.publication_date)}",
             (
-                f"Angebotsfrist:  {display(tender.submission_deadline)} "
-                f"(in {display(tender.days_until_deadline)} Tagen)"
+                f"Angebotsfrist:  {_safe(tender.submission_deadline)} "
+                f"(in {_safe(tender.days_until_deadline)} Tagen)"
             ),
-            f"Bindefrist:     {display(tender.binding_period_end)}",
-            f"Lieferfrist:    {display(tender.delivery_deadline)}",
+            f"Bindefrist:     {_safe(tender.binding_period_end)}",
+            f"Lieferfrist:    {_safe(tender.delivery_deadline)}",
             (
-                f"Volumen:        {display(tender.estimated_value)} "
-                f"{display(tender.currency, missing='')}"
+                f"Volumen:        {_safe(tender.estimated_value)} "
+                f"{_safe(tender.currency, missing='')}"
             ),
-            f"Verfahren:      {display(tender.procedure_type)}",
+            f"Verfahren:      {_safe(tender.procedure_type)}",
             f"Status:         {tender.status}",
             "",
-            f"{display(tender.description)}",
+            f"{_safe(tender.description)}",
         ]
     )
-    console.print(Panel(body, title=tender.id, expand=True))
+    console.print(Panel(body, title=escape(tender.id), expand=True))
 
     if tender.lots:
         table = Table(title="Lose", header_style="bold")
@@ -414,7 +425,7 @@ def show(
         table.add_column("Titel", overflow="fold")
         table.add_column("Volumen", justify="right")
         for lot in tender.lots:
-            table.add_row(display(lot.lot_id), display(lot.title), display(lot.estimated_value))
+            table.add_row(_safe(lot.lot_id), _safe(lot.title), _safe(lot.estimated_value))
         console.print(table)
 
     if tender.documents:
@@ -425,10 +436,10 @@ def show(
         table.add_column("Lokal", overflow="fold")
         for document in tender.documents:
             table.add_row(
-                display(document.name),
+                _safe(document.name),
                 str(document.access),
-                display(document.url),
-                display(document.local_path),
+                _safe(document.url),
+                _safe(document.local_path),
             )
         console.print(table)
 
@@ -442,8 +453,8 @@ def show(
             table.add_row(
                 alias.source,
                 alias.source_id,
-                display(alias.match_reason),
-                display(alias.match_confidence),
+                _safe(alias.match_reason),
+                _safe(alias.match_confidence),
             )
         console.print(table)
 
@@ -455,15 +466,17 @@ def show(
         table.add_column("Neu", overflow="fold")
         for change in changes[:20]:
             table.add_row(
-                display(change.detected_at),
-                change.field,
-                display(change.old_value),
-                display(change.new_value),
+                _safe(change.detected_at),
+                escape(change.field),
+                _safe(change.old_value),
+                _safe(change.new_value),
             )
         console.print(table)
 
     if tender.notes:
-        console.print(Panel("\n".join(f"- {note}" for note in tender.notes), title="Hinweise"))
+        console.print(
+            Panel("\n".join(f"- {escape(note)}" for note in tender.notes), title="Hinweise")
+        )
 
 
 @app.command()
@@ -512,7 +525,7 @@ def runs(
     table.add_column("Fehler", justify="right")
     for run in run_records:
         table.add_row(
-            display(run.started_at),
+            _safe(run.started_at),
             ", ".join(run.sources or []),
             str(run.found),
             str(run.new),
@@ -532,14 +545,30 @@ def runs(
         state_table.add_column("Letzter Fehler", overflow="fold", max_width=50)
         for state in states:
             state_table.add_row(
-                state.name,
-                display(state.last_run_at),
-                display(state.last_success_at),
+                escape(state.name),
+                _safe(state.last_run_at),
+                _safe(state.last_success_at),
                 str(state.last_result_count),
                 str(state.consecutive_failures),
-                display(state.last_error, missing="-"),
+                _safe(state.last_error, missing="-"),
             )
         console.print(state_table)
+
+
+@app.command("db-upgrade")
+def db_upgrade(config: Path | None = typer.Option(None, "--config")) -> None:
+    """Datenbankschema auf den aktuellen Stand bringen (Alembic)."""
+    settings = _settings(config)
+    before = current_revision(settings.database_url)
+    after = ensure_current_schema(settings.database_url)
+    head = head_revision(settings.database_url)
+    if before == after:
+        console.print(f"Schema bereits aktuell (Revision {after}).")
+    else:
+        console.print(f"Schema migriert: [dim]{before}[/dim] -> [green]{after}[/green]")
+    if after != head:  # pragma: no cover - nur bei fehlgeschlagener Migration
+        console.print(f"[red]Achtung:[/red] erwartete Revision {head}, erreicht {after}")
+        raise typer.Exit(1)
 
 
 @app.command("cache-clear")

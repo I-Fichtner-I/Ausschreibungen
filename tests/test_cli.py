@@ -96,3 +96,48 @@ def test_search_with_unknown_source_fails_clearly(settings: Settings):
     result = runner.invoke(app, _args(settings, "search", "--source", "gibtsnicht"))
     assert result.exit_code == 1
     assert "Keine aktive Quelle" in result.output
+
+
+def test_markup_in_source_data_is_escaped(sample_tender_file: Path, settings: Settings):
+    """T-06: Rich-Markup aus Quelldaten wird literal ausgegeben, nicht interpretiert."""
+    import io
+
+    from rich.console import Console
+
+    from tender_ai.cli import _safe, _tender_table
+    from tender_ai.models.tender import Tender
+
+    evil = "[bold red]MANIPULIERT[/] [link=https://evil.invalid]klick[/link]"
+    assert _safe(evil) == evil.replace("[", "\\[")
+
+    tender = Tender(
+        id="x:1", source="x", source_id="1", title=evil, contracting_authority="[unclosed"
+    )
+    buffer = io.StringIO()
+    Console(file=buffer, width=200, force_terminal=False).print(_tender_table([tender]))
+    output = buffer.getvalue()
+    assert "[bold red]MANIPULIERT" in output
+    assert "[unclosed" in output
+
+
+def test_show_renders_markup_titles_without_error(sample_tender_file: Path, settings: Settings):
+    """Der komplette CLI-Pfad darf an Markup in Quelldaten nicht scheitern."""
+    payload = json.loads(sample_tender_file.read_text(encoding="utf-8"))
+    payload["tenders"][0]["title"] = "[bold red]MANIPULIERT[/] [unclosed"
+    sample_tender_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert runner.invoke(app, _args(settings, "search", "--source", "fixture")).exit_code == 0
+    result = runner.invoke(app, _args(settings, "show", "fixture:t-1"))
+    assert result.exit_code == 0, result.output
+    assert "MANIPULIERT" in result.output
+
+
+def test_db_upgrade_command(settings: Settings):
+    """T-11: Schema wird ueber Migrationen angelegt und gemeldet."""
+    result = runner.invoke(app, _args(settings, "init"))
+    assert result.exit_code == 0, result.output
+    assert "Schema-Revision" in result.output
+
+    result = runner.invoke(app, _args(settings, "db-upgrade"))
+    assert result.exit_code == 0, result.output
+    assert "bereits aktuell" in result.output

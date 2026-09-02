@@ -67,7 +67,8 @@ tender-ai runs                              # Laufprotokoll + Quellenstatus
 
 | Befehl | Zweck |
 |--------|-------|
-| `tender-ai init` | Verzeichnisse anlegen, Datenbankschema erzeugen |
+| `tender-ai init` | Verzeichnisse anlegen, Datenbankschema per Migration erzeugen |
+| `tender-ai db-upgrade` | Datenbankschema auf den aktuellen Stand bringen |
 | `tender-ai sources` | konfigurierte Quellen anzeigen |
 | `tender-ai doctor [--source X] [--json]` | Erreichbarkeit und Parsing pruefen |
 | `tender-ai search [...]` | recherchieren (siehe `--help`) |
@@ -117,6 +118,13 @@ Danach `tender-ai doctor --source land_xy`.
 Datenbank: SQLite ist Standard (`data/tender_ai.db`). Fuer den Produktivbetrieb
 in `.env`:
 `TENDER_AI_DATABASE_URL=postgresql+psycopg://user:passwort@host:5432/tender_ai`
+
+Das Schema wird ueber Alembic verwaltet. `tender-ai init` legt es an,
+`tender-ai db-upgrade` bringt eine bestehende Datenbank auf den aktuellen
+Stand. Eine Datenbank aus der Zeit vor den Migrationen wird automatisch auf
+die initiale Revision gestempelt, ohne Daten zu verlieren. SQLite laeuft im
+WAL-Modus mit `busy_timeout` und aktiven Fremdschluesseln, damit ein
+cron-Lauf und die interaktive CLI sich nicht gegenseitig blockieren.
 
 ---
 
@@ -211,7 +219,7 @@ tender_ai/
 ├── models/                Tender, TenderLot, TenderDocument, Provenance, …
 ├── sources/               base.py, registry.py, ted.py, rss.py, fixture.py, parsing.py
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
-├── database/              SQLAlchemy-Modelle, Session, Repository
+├── database/              SQLAlchemy-Modelle, Session, Repository, Alembic-Migrationen
 └── export/                JSON / CSV / XLSX
 tests/                     Offline-Tests (respx-Mocks)
 config.yaml  .env.example  docs/architecture.md
