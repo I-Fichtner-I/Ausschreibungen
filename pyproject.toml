@@ -22,10 +22,16 @@ dependencies = [
     "structlog>=24.1,<27",
     "feedparser>=6.0,<7",
     "alembic>=1.13,<2",
+    # Stufe 2: Auslesen der Vergabeunterlagen
+    "pdfplumber>=0.11,<1",
+    "python-docx>=1.1,<2",
+    "openpyxl>=3.1,<4",
+    "beautifulsoup4>=4.12,<5",
+    "lxml>=5.0,<7",
 ]
 
 [project.optional-dependencies]
-excel = ["openpyxl>=3.1,<4"]
+excel = ["openpyxl>=3.1,<4"]  # bereits in dependencies; Extra bleibt fuer Kompatibilitaet
 dev = [
     "pytest>=8.0,<10",
     "pytest-asyncio>=0.23,<2",
@@ -37,6 +43,8 @@ dev = [
     "mypy>=1.10,<2",
     "pip-audit>=2.7,<3",
     "types-PyYAML",
+    # erzeugt Beispiel-PDFs fuer die Extraktionstests
+    "fpdf2>=2.7,<3",
 ]
 
 [project.scripts]

@@ -17,15 +17,22 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..config import DedupConfig
-from ..models.common import blocking_key, normalize_text, utcnow
-from ..models.tender import Tender, TenderStatus
+from ..models.analysis import AnalysisResult
+from ..models.common import Provenance, blocking_key, normalize_text, utcnow
+from ..models.document import ExtractedDocument
+from ..models.item import ItemExtractionResult, TenderItem
+from ..models.tender import Tender, TenderDocument, TenderStatus
 from ..pipeline.dedup import DuplicateDetector, DuplicateMatch
 from .models import (
+    DocumentExtractRecord,
     IngestRunRecord,
+    ItemExtractionRecord,
+    RiskAnalysisRecord,
     SourceStateRecord,
     TenderAliasRecord,
     TenderChangeRecord,
     TenderDocumentRecord,
+    TenderItemRecord,
     TenderRecord,
 )
 
@@ -337,6 +344,193 @@ class TenderRepository:
                 .limit(limit)
             )
         )
+
+    # --- Dokumente und Extrakte (Stufe 2) ----------------------------------
+    def documents_for(self, tender_id: str) -> list[TenderDocumentRecord]:
+        return list(
+            self.session.scalars(
+                select(TenderDocumentRecord)
+                .where(TenderDocumentRecord.tender_id == tender_id)
+                .order_by(TenderDocumentRecord.id)
+            )
+        )
+
+    def update_document(self, record: TenderDocumentRecord, document: TenderDocument) -> None:
+        """Downloadergebnis am Dokument vermerken."""
+        record.local_path = document.local_path
+        record.retrieved_at = document.retrieved_at
+        record.checksum_sha256 = document.checksum_sha256
+        record.size_bytes = document.size_bytes
+        record.media_type = document.media_type or record.media_type
+        record.access = str(document.access)
+        self.session.flush()
+
+    def save_extract(
+        self, document_record: TenderDocumentRecord, extract: ExtractedDocument
+    ) -> DocumentExtractRecord:
+        """Extraktionsergebnis speichern (je Dokument genau ein Extrakt)."""
+        record = document_record.extract or DocumentExtractRecord(
+            document_id=document_record.id, tender_id=document_record.tender_id
+        )
+        record.extractor = extract.extractor
+        record.status = str(extract.status)
+        record.error = extract.error
+        record.text = extract.text or None
+        record.page_count = extract.page_count
+        record.table_count = len(extract.tables)
+        record.character_count = extract.character_count
+        record.tables = _json_ready([table.model_dump(mode="json") for table in extract.tables])
+        record.doc_metadata = _json_ready(extract.metadata)
+        record.truncated = extract.truncated
+        record.ocr_used = extract.ocr_used
+        record.checksum_sha256 = extract.checksum_sha256
+        record.size_bytes = extract.size_bytes
+        record.extracted_at = extract.extracted_at
+        document_record.extract = record
+        self.session.flush()
+        return record
+
+    def extracts_for(self, tender_id: str) -> list[DocumentExtractRecord]:
+        return list(
+            self.session.scalars(
+                select(DocumentExtractRecord)
+                .where(DocumentExtractRecord.tender_id == tender_id)
+                .order_by(DocumentExtractRecord.id)
+            )
+        )
+
+    def save_risk(
+        self, result: AnalysisResult, tender_record: TenderRecord | None = None
+    ) -> RiskAnalysisRecord:
+        """Aktuelle Risikobewertung samt Begruendung speichern."""
+        record = self.session.get(RiskAnalysisRecord, result.tender_id)
+        if record is None:
+            record = RiskAnalysisRecord(tender_id=result.tender_id)
+            self.session.add(record)
+        if tender_record is not None:
+            record.content_hash = tender_record.content_hash
+        risk = result.risk
+        record.score = risk.score
+        record.level = str(risk.level)
+        record.factors = _json_ready([factor.as_dict() for factor in risk.top_factors])
+        record.findings = _json_ready(result.as_dict()["findings"])
+        record.documents_analyzed = risk.documents_analyzed
+        record.documents_unreadable = risk.documents_unreadable
+        record.characters_analyzed = risk.characters_analyzed
+        record.computed_at = risk.computed_at
+        self.session.flush()
+        return record
+
+    def risk_for(self, tender_id: str) -> RiskAnalysisRecord | None:
+        return self.session.get(RiskAnalysisRecord, tender_id)
+
+    def save_items(
+        self, result: ItemExtractionResult, tender_record: TenderRecord | None = None
+    ) -> ItemExtractionRecord:
+        """Erkannte Positionen speichern - der Lauf ersetzt das Vorergebnis.
+
+        Die Erkennung ist aus den Unterlagen reproduzierbar; ein Zusammenfuehren
+        alter und neuer Positionen wuerde nur Karteileichen erzeugen, wenn eine
+        korrigierte Ausschreibung Positionen streicht.
+        """
+        for existing in self.items_for(result.tender_id):
+            self.session.delete(existing)
+        self.session.flush()
+
+        for ordinal, item in enumerate(result.items):
+            provenance = item.provenance
+            self.session.add(
+                TenderItemRecord(
+                    tender_id=result.tender_id,
+                    ordinal=ordinal,
+                    position=item.position,
+                    title=item.title,
+                    description=item.description,
+                    quantity=item.quantity,
+                    quantity_estimated=item.quantity_estimated,
+                    unit=item.unit,
+                    unit_original=item.unit_original,
+                    manufacturer=item.manufacturer,
+                    model_number=item.model_number,
+                    article_number=item.article_number,
+                    specifications=_json_ready(dict(item.specifications)),
+                    brand_locked=item.brand_locked,
+                    confidence=item.confidence,
+                    match_confidence=item.match_confidence,
+                    source_kind=str(item.source_kind),
+                    document=provenance.document if provenance else None,
+                    page=provenance.page if provenance else None,
+                    section=provenance.section if provenance else None,
+                    original_text=provenance.original_text if provenance else None,
+                    warnings=list(item.warnings),
+                )
+            )
+
+        record = self.session.get(ItemExtractionRecord, result.tender_id)
+        if record is None:
+            record = ItemExtractionRecord(tender_id=result.tender_id)
+            self.session.add(record)
+        if tender_record is not None:
+            record.content_hash = tender_record.content_hash
+        record.item_count = result.item_count
+        record.priceable_count = result.priceable_count
+        record.average_confidence = result.average_confidence
+        record.documents_scanned = result.documents_scanned
+        record.tables_scanned = result.tables_scanned
+        record.tables_used = result.tables_used
+        record.warnings = list(result.warnings)
+        record.extracted_at = result.extracted_at
+        self.session.flush()
+        return record
+
+    def items_for(self, tender_id: str, min_confidence: int = 0) -> list[TenderItemRecord]:
+        """Positionen einer Ausschreibung in der Reihenfolge des Dokuments."""
+        query = select(TenderItemRecord).where(TenderItemRecord.tender_id == tender_id)
+        if min_confidence > 0:
+            query = query.where(TenderItemRecord.confidence >= min_confidence)
+        return list(self.session.scalars(query.order_by(TenderItemRecord.ordinal)))
+
+    def item_extraction_for(self, tender_id: str) -> ItemExtractionRecord | None:
+        return self.session.get(ItemExtractionRecord, tender_id)
+
+    @staticmethod
+    def to_item(record: TenderItemRecord) -> TenderItem:
+        """Datensatz zurueck in das Modell - fuer Ausgabe und Folgestufen."""
+        provenance = None
+        if record.document or record.original_text:
+            provenance = Provenance(
+                source="document",
+                method="document",
+                document=record.document,
+                page=record.page,
+                section=record.section,
+                original_text=record.original_text,
+                confidence=record.confidence,
+            )
+        return TenderItem(
+            position=record.position,
+            title=record.title,
+            description=record.description,
+            quantity=record.quantity,
+            quantity_estimated=record.quantity_estimated,
+            unit=record.unit,
+            unit_original=record.unit_original,
+            manufacturer=record.manufacturer,
+            model_number=record.model_number,
+            article_number=record.article_number,
+            specifications=dict(record.specifications or {}),
+            brand_locked=record.brand_locked,
+            confidence=record.confidence,
+            match_confidence=record.match_confidence,
+            source_kind=record.source_kind,  # type: ignore[arg-type]
+            provenance=provenance,
+            warnings=list(record.warnings or []),
+        )
+
+    def save_requirements(self, record: TenderRecord, tender: Tender) -> None:
+        """Erkannte Anforderungen im Tender-Payload festhalten."""
+        record.payload = _json_ready(tender.model_dump(mode="json"))
+        self.session.flush()
 
     def changes_for(self, tender_id: str, limit: int = 50) -> list[TenderChangeRecord]:
         """Aenderungen genau dieser Ausschreibung - direkt per Query, nicht gefiltert."""

@@ -2,7 +2,9 @@
 
 from .models import (
     Base,
+    DocumentExtractRecord,
     IngestRunRecord,
+    RiskAnalysisRecord,
     SourceStateRecord,
     TenderAliasRecord,
     TenderChangeRecord,
@@ -14,7 +16,9 @@ from .session import create_all, get_engine, session_scope
 
 __all__ = [
     "Base",
+    "DocumentExtractRecord",
     "IngestRunRecord",
+    "RiskAnalysisRecord",
     "SourceStateRecord",
     "TenderAliasRecord",
     "TenderChangeRecord",

@@ -8,12 +8,22 @@ annotated-types==0.8.0
     # via pydantic
 anyio==4.14.2
     # via httpx
+beautifulsoup4==4.15.0
+    # via tender-ai
 certifi==2026.7.22
     # via
     #   httpcore
     #   httpx
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
+charset-normalizer==3.5.1
+    # via pdfminer-six
 colorama==0.4.6 ; sys_platform == 'win32'
     # via typer
+cryptography==50.0.1
+    # via pdfminer-six
+et-xmlfile==2.0.0
+    # via openpyxl
 feedparser==6.0.14
     # via tender-ai
 feedparser-sgmllib==2.1.0
@@ -36,6 +46,10 @@ idna==3.19
     # via
     #   anyio
     #   httpx
+lxml==6.1.2
+    # via
+    #   python-docx
+    #   tender-ai
 mako==1.4.1
     # via alembic
 markdown-it-py==4.2.0
@@ -44,6 +58,16 @@ markupsafe==3.0.3
     # via mako
 mdurl==0.1.2
     # via markdown-it-py
+openpyxl==3.1.5
+    # via tender-ai
+pdfminer-six==20260107
+    # via pdfplumber
+pdfplumber==0.11.10
+    # via tender-ai
+pillow==12.3.0
+    # via pdfplumber
+pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
 pydantic==2.13.5
     # via
     #   pydantic-settings
@@ -54,6 +78,10 @@ pydantic-settings==2.15.0
     # via tender-ai
 pygments==2.21.0
     # via rich
+pypdfium2==5.13.0
+    # via pdfplumber
+python-docx==1.2.0
+    # via tender-ai
 python-dotenv==1.2.3
     # via
     #   pydantic-settings
@@ -66,6 +94,8 @@ rich==15.0.0
     #   typer
 shellingham==1.5.4
     # via typer
+soupsieve==2.9.2
+    # via beautifulsoup4
 sqlalchemy==2.0.52
     # via
     #   alembic
@@ -78,8 +108,10 @@ typing-extensions==4.16.0
     # via
     #   alembic
     #   anyio
+    #   beautifulsoup4
     #   pydantic
     #   pydantic-core
+    #   python-docx
     #   sqlalchemy
     #   typing-inspection
 typing-inspection==0.4.4

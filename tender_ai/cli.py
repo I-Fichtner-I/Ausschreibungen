@@ -6,6 +6,9 @@ tender-ai doctor               Quellen auf Erreichbarkeit pruefen
 tender-ai search               Ausschreibungen recherchieren (live)
 tender-ai list                 gespeicherte Ausschreibungen anzeigen
 tender-ai show <id>            Details einer Ausschreibung
+tender-ai documents <id>       Vergabeunterlagen laden und auslesen
+tender-ai analyze <id>         Anforderungen erkennen und Risiko bewerten
+tender-ai analyze --all        alle laufenden Ausschreibungen bewerten
 tender-ai export               Ergebnisse als JSON/CSV/XLSX ausgeben
 tender-ai runs                 letzte Rechercherlaeufe
 tender-ai cache-clear          HTTP-Cache leeren
@@ -34,7 +37,15 @@ from .database.session import session_scope
 from .export.exporters import EXPORT_FORMATS, export_tenders
 from .models.common import display as _display
 from .models.tender import Tender
-from .services import check_sources, run_search
+from .services import (
+    analyze_open_tenders,
+    analyze_tender,
+    check_sources,
+    extract_items_for_open_tenders,
+    extract_tender_items,
+    fetch_documents,
+    run_search,
+)
 from .sources.base import SearchQuery
 from .sources.registry import available_types
 
@@ -92,7 +103,22 @@ def _query_from_options(
     return query
 
 
-def _tender_table(tenders: list[Tender], title: str = "Ausschreibungen") -> Table:
+RISK_COLOURS = {"LOW": "green", "MEDIUM": "yellow", "HIGH": "red", "VERY_HIGH": "bold red"}
+
+
+def _risk_cell(score: int | None, level: str | None) -> str:
+    """Risiko kompakt und farbig; ohne Analyse bleibt es leer statt 0."""
+    if score is None or level is None:
+        return "[dim]-[/dim]"
+    colour = RISK_COLOURS.get(level, "white")
+    return f"[{colour}]{score}[/{colour}]"
+
+
+def _tender_table(
+    tenders: list[Tender],
+    title: str = "Ausschreibungen",
+    risks: dict[str, tuple[int, str]] | None = None,
+) -> Table:
     table = Table(title=title, show_lines=False, header_style="bold")
     table.add_column("Quelle", style="cyan", no_wrap=True)
     table.add_column("ID", style="dim", no_wrap=True, max_width=22)
@@ -100,7 +126,9 @@ def _tender_table(tenders: list[Tender], title: str = "Ausschreibungen") -> Tabl
     table.add_column("Vergabestelle", overflow="fold", max_width=30)
     table.add_column("Frist", no_wrap=True)
     table.add_column("Tage", justify="right", no_wrap=True)
+    table.add_column("Risiko", justify="right", no_wrap=True)
     table.add_column("Volumen", justify="right", no_wrap=True)
+    risks = risks or {}
     for tender in tenders:
         days_left = tender.days_until_deadline
         days_text = _safe(days_left)
@@ -119,6 +147,7 @@ def _tender_table(tenders: list[Tender], title: str = "Ausschreibungen") -> Tabl
             _safe(tender.contracting_authority),
             _safe(tender.submission_deadline),
             f"[{style}]{days_text}[/{style}]" if style else days_text,
+            _risk_cell(*risks[tender.id]) if tender.id in risks else "[dim]-[/dim]",
             value,
         )
     return table
@@ -329,19 +358,36 @@ def list_tenders(
             order_by=order_by,
         )
         tenders = [TenderRepository.to_tender(record) for record in records]
+        risks = {
+            record.id: (record.risk_analysis.score, record.risk_analysis.level)
+            for record in records
+            if record.risk_analysis is not None
+        }
         stats = repository.stats()
 
     if json_output:
         console.print_json(
             jsonlib.dumps(
-                {"stats": stats, "tenders": [t.model_dump(mode="json") for t in tenders]},
+                {
+                    "stats": stats,
+                    "tenders": [
+                        {
+                            **tender.model_dump(mode="json"),
+                            "risk_score": risks.get(tender.id, (None, None))[0],
+                            "risk_level": risks.get(tender.id, (None, None))[1],
+                        }
+                        for tender in tenders
+                    ],
+                },
                 ensure_ascii=False,
                 default=str,
             )
         )
         return
 
-    console.print(_tender_table(tenders, title=f"Gespeicherte Ausschreibungen ({len(tenders)})"))
+    console.print(
+        _tender_table(tenders, title=f"Gespeicherte Ausschreibungen ({len(tenders)})", risks=risks)
+    )
     console.print(
         f"Gesamt: {stats['tenders_primary']} (inkl. Dubletten: {stats['tenders_total']}), "
         f"laufend: {stats['tenders_open']}"
@@ -365,6 +411,22 @@ def show(
         tender = TenderRepository.to_tender(record)
         aliases = repository.aliases_for(record.id)
         changes = repository.changes_for(record.id, limit=50)
+        risk_record = repository.risk_for(record.id)
+        risk_summary = (
+            (risk_record.score, risk_record.level, list(risk_record.factors or []))
+            if risk_record
+            else None
+        )
+        item_extraction = repository.item_extraction_for(record.id)
+        item_summary = (
+            (
+                item_extraction.item_count,
+                item_extraction.priceable_count,
+                item_extraction.average_confidence,
+            )
+            if item_extraction
+            else None
+        )
 
     if json_output:
         console.print_json(
@@ -454,6 +516,38 @@ def show(
             )
         console.print(table)
 
+    if risk_summary is not None:
+        score, level, factors = risk_summary
+        colour = RISK_COLOURS.get(level, "white")
+        risk_table = Table(
+            title=f"Risiko: {score}/100 ({level})", header_style="bold", title_style=colour
+        )
+        risk_table.add_column("Punkte", justify="right")
+        risk_table.add_column("Faktor")
+        risk_table.add_column("Begruendung", overflow="fold")
+        for factor in factors[:8]:
+            risk_table.add_row(
+                str(factor.get("points", "")),
+                _safe(factor.get("label")),
+                _safe(factor.get("explanation")),
+            )
+        console.print(risk_table)
+    else:
+        console.print(
+            "[dim]Noch nicht analysiert - 'tender-ai analyze " + escape(tender.id) + "'[/dim]"
+        )
+
+    if item_summary is not None:
+        count, priceable, confidence = item_summary
+        console.print(
+            f"Positionen: [bold]{count}[/bold], davon kalkulierbar: {priceable}, "
+            f"mittlere Konfidenz: {_confidence_cell(confidence)}"
+        )
+    else:
+        console.print(
+            "[dim]Positionen noch nicht erkannt - 'tender-ai items " + escape(tender.id) + "'[/dim]"
+        )
+
     if tender.notes:
         console.print(
             Panel("\n".join(f"- {escape(note)}" for note in tender.notes), title="Hinweise")
@@ -536,6 +630,207 @@ def runs(
         console.print(state_table)
 
 
+@app.command()
+def documents(
+    tender_id: str = typer.Argument(..., help="Tender-ID (z. B. ted:00123456-2026) oder Quell-ID"),
+    config: Path | None = typer.Option(None, "--config"),
+    extract: bool = typer.Option(
+        True, "--extract/--no-extract", help="Text und Tabellen aus den Unterlagen auslesen"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="bereits vorhandene Dateien erneut herunterladen"
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Vergabeunterlagen einer Ausschreibung laden und auslesen (Stufe 2)."""
+    settings = _settings(config)
+    try:
+        report = asyncio.run(fetch_documents(settings, tender_id, extract=extract, force=force))
+    except ConfigError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        console.print_json(jsonlib.dumps(report.as_dict(), ensure_ascii=False, default=str))
+        return
+
+    console.print(
+        Panel.fit(
+            f"[bold]{_safe(report.title)}[/bold]\n{escape(report.tender_id)}",
+            title="Vergabeunterlagen",
+        )
+    )
+    if not report.documents:
+        console.print("[yellow]Keine abrufbaren Unterlagen gefunden.[/yellow]")
+    else:
+        table = Table(header_style="bold")
+        table.add_column("Dokument", overflow="fold", max_width=40)
+        table.add_column("Zugriff")
+        table.add_column("Extraktor")
+        table.add_column("Status")
+        table.add_column("Seiten", justify="right")
+        table.add_column("Tabellen", justify="right")
+        table.add_column("Zeichen", justify="right")
+        for document in report.documents:
+            status = document.status or "-"
+            style = (
+                "green"
+                if status == "OK"
+                else ("yellow" if status in ("PARTIAL", "EMPTY") else "red")
+            )
+            table.add_row(
+                _safe(document.name or document.local_path),
+                _safe(document.access),
+                _safe(document.extractor),
+                f"[{style}]{escape(status)}[/{style}]",
+                str(document.page_count),
+                str(document.table_count),
+                f"{document.character_count:,}".replace(",", "."),
+            )
+        console.print(table)
+
+    console.print(
+        f"Geladen: [green]{report.downloaded}[/green], ausgelesen: {report.extracted}, "
+        f"fehlgeschlagen: {report.failed}, nicht oeffentlich: {report.skipped_restricted}"
+    )
+    for document in report.documents:
+        if document.note:
+            console.print(
+                f"[yellow]Hinweis[/yellow] {_safe(document.name)}: {_safe(document.note)}"
+            )
+
+
+@app.command()
+def analyze(
+    tender_id: str | None = typer.Argument(
+        None, help="Tender-ID oder Quell-ID; entfaellt bei --all"
+    ),
+    config: Path | None = typer.Option(None, "--config"),
+    fetch: bool = typer.Option(
+        True, "--fetch/--no-fetch", help="fehlende Unterlagen vorher nachladen"
+    ),
+    show_findings: bool = typer.Option(
+        False, "--findings", help="alle erkannten Hinweise mit Fundstelle auflisten"
+    ),
+    analyze_all: bool = typer.Option(
+        False, "--all", help="alle laufenden Ausschreibungen analysieren"
+    ),
+    limit: int = typer.Option(50, "--limit", "-n", help="max. Ausschreibungen bei --all"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Unterlagen auswerten: Anforderungen erkennen und Risiko bewerten (Stufe 2)."""
+    settings = _settings(config)
+
+    if analyze_all:
+        report = asyncio.run(analyze_open_tenders(settings, limit=limit, fetch_missing=fetch))
+        if json_output:
+            console.print_json(jsonlib.dumps(report.as_dict(), ensure_ascii=False, default=str))
+            return
+        table = Table(title=f"Analysierte Ausschreibungen ({report.count})", header_style="bold")
+        table.add_column("Risiko", justify="right")
+        table.add_column("Stufe")
+        table.add_column("ID", style="dim", overflow="fold")
+        table.add_column("Hinweise", justify="right")
+        for result in sorted(report.analyzed, key=lambda item: -item.risk.score):
+            level = str(result.risk.level)
+            table.add_row(
+                _risk_cell(result.risk.score, level),
+                escape(level),
+                escape(result.tender_id),
+                str(len(result.findings)),
+            )
+        console.print(table)
+        for failure in report.failed:
+            console.print(
+                f"[red]Analyse fehlgeschlagen[/red] {escape(failure['tender_id'])}: "
+                f"{escape(failure['error'])}"
+            )
+        return
+
+    if not tender_id:
+        console.print("[red]Bitte eine Tender-ID angeben oder --all verwenden.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        result = asyncio.run(analyze_tender(settings, tender_id, fetch_missing=fetch))
+    except ConfigError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        console.print_json(jsonlib.dumps(result.as_dict(), ensure_ascii=False, default=str))
+        return
+
+    risk = result.risk
+    colour = {
+        "LOW": "green",
+        "MEDIUM": "yellow",
+        "HIGH": "red",
+        "VERY_HIGH": "bold red",
+    }[str(risk.level)]
+    console.print(
+        Panel.fit(
+            f"Risiko: [{colour}]{risk.score}/100 ({escape(str(risk.level))})[/{colour}]\n"
+            f"Ausgewertet: {risk.documents_analyzed} Dokument(e), "
+            f"{risk.characters_analyzed:,} Zeichen".replace(",", ".")
+            + (
+                f"\nNicht auswertbar: {risk.documents_unreadable}"
+                if risk.documents_unreadable
+                else ""
+            ),
+            title=f"Analyse {escape(result.tender_id)}",
+        )
+    )
+
+    if risk.factors:
+        table = Table(title="Risikofaktoren", header_style="bold")
+        table.add_column("Punkte", justify="right")
+        table.add_column("Faktor")
+        table.add_column("Begruendung", overflow="fold")
+        for factor in risk.top_factors:
+            table.add_row(str(factor.points), _safe(factor.label), _safe(factor.explanation))
+        console.print(table)
+    else:
+        console.print("[green]Keine Risikofaktoren erkannt.[/green]")
+
+    counts: dict[str, int] = {}
+    for finding in result.findings:
+        counts[str(finding.kind)] = counts.get(str(finding.kind), 0) + 1
+    if counts:
+        summary = Table(title="Erkannte Hinweise", header_style="bold")
+        summary.add_column("Art")
+        summary.add_column("Anzahl", justify="right")
+        for kind, count in sorted(counts.items(), key=lambda item: -item[1]):
+            summary.add_row(escape(kind), str(count))
+        console.print(summary)
+    else:
+        console.print(
+            "[yellow]Keine Anforderungen erkannt[/yellow] - Unterlagen pruefen "
+            "(moeglicherweise Scans ohne Texterkennung)."
+        )
+
+    if show_findings:
+        detail = Table(title="Fundstellen", header_style="bold")
+        detail.add_column("Art")
+        detail.add_column("Dokument", overflow="fold", max_width=24)
+        detail.add_column("Seite", justify="right")
+        detail.add_column("Beleg", overflow="fold")
+        for finding in result.findings:
+            provenance = finding.provenance
+            detail.add_row(
+                escape(str(finding.kind)),
+                _safe(provenance.document if provenance else None),
+                _safe(provenance.page if provenance else None),
+                _safe(finding.evidence()),
+            )
+        console.print(detail)
+
+    console.print(
+        "[dim]Regelbasierte Auswertung: jeder Hinweis ist ein Fund im Text, "
+        "keine Rechtsauskunft. Vor einer Teilnahme im Original pruefen.[/dim]"
+    )
+
+
 @app.command("db-upgrade")
 def db_upgrade(config: Path | None = typer.Option(None, "--config")) -> None:
     """Datenbankschema auf den aktuellen Stand bringen (Alembic)."""
@@ -550,6 +845,146 @@ def db_upgrade(config: Path | None = typer.Option(None, "--config")) -> None:
     if after != head:  # pragma: no cover - nur bei fehlgeschlagener Migration
         console.print(f"[red]Achtung:[/red] erwartete Revision {head}, erreicht {after}")
         raise typer.Exit(1)
+
+
+def _confidence_cell(confidence: int) -> str:
+    """Konfidenz einfaerben - unter 50 ist die Zeile Handarbeit."""
+    colour = "green" if confidence >= 75 else ("yellow" if confidence >= 50 else "red")
+    return f"[{colour}]{confidence}[/{colour}]"
+
+
+def _quantity_cell(item: Any) -> str:
+    """Menge inklusive Schaetz-Kennzeichnung; unbekannt bleibt UNKNOWN."""
+    if item.quantity is None:
+        return "[dim]UNKNOWN[/dim]"
+    number = f"{item.quantity:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
+    number = number.removesuffix(",00")
+    return f"~{number}" if item.quantity_estimated else number
+
+
+@app.command()
+def items(
+    tender_id: str | None = typer.Argument(
+        None, help="Tender-ID oder Quell-ID; entfaellt bei --all"
+    ),
+    config: Path | None = typer.Option(None, "--config"),
+    fetch: bool = typer.Option(
+        True, "--fetch/--no-fetch", help="fehlende Unterlagen vorher nachladen"
+    ),
+    extract_all: bool = typer.Option(
+        False, "--all", help="alle laufenden Ausschreibungen auswerten"
+    ),
+    limit: int = typer.Option(50, "--limit", "-n", help="max. Ausschreibungen bei --all"),
+    min_confidence: int = typer.Option(
+        0, "--min-confidence", help="nur Positionen ab dieser Erkennungs-Konfidenz"
+    ),
+    show_evidence: bool = typer.Option(
+        False, "--evidence", help="Fundstelle und Originalzeile je Position anzeigen"
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Positionen aus den Vergabeunterlagen erkennen (Stufe 3)."""
+    settings = _settings(config)
+
+    if extract_all:
+        report = asyncio.run(
+            extract_items_for_open_tenders(settings, limit=limit, fetch_missing=fetch)
+        )
+        if json_output:
+            console.print_json(jsonlib.dumps(report.as_dict(), ensure_ascii=False, default=str))
+            return
+        title = f"Artikelerkennung ({report.count} Ausschreibungen, {report.item_count} Positionen)"
+        table = Table(title=title, header_style="bold")
+        table.add_column("Positionen", justify="right")
+        table.add_column("davon kalkulierbar", justify="right")
+        table.add_column("Konfidenz", justify="right")
+        table.add_column("ID", style="dim", overflow="fold")
+        for result in sorted(report.extracted, key=lambda item: -item.item_count):
+            table.add_row(
+                str(result.item_count),
+                str(result.priceable_count),
+                _confidence_cell(result.average_confidence),
+                escape(result.tender_id),
+            )
+        console.print(table)
+        for failure in report.failed:
+            console.print(
+                f"[red]Artikelerkennung fehlgeschlagen[/red] {escape(failure['tender_id'])}: "
+                f"{escape(failure['error'])}"
+            )
+        return
+
+    if not tender_id:
+        console.print("[red]Bitte eine Tender-ID angeben oder --all verwenden.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        result = asyncio.run(extract_tender_items(settings, tender_id, fetch_missing=fetch))
+    except ConfigError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    shown = [item for item in result.items if item.confidence >= min_confidence]
+    if json_output:
+        payload = result.as_dict()
+        payload["items"] = [item.as_dict() for item in shown]
+        console.print_json(jsonlib.dumps(payload, ensure_ascii=False, default=str))
+        return
+
+    console.print(
+        Panel.fit(
+            f"Positionen: [bold]{result.item_count}[/bold], "
+            f"kalkulierbar: {result.priceable_count}, "
+            f"mittlere Konfidenz: {_confidence_cell(result.average_confidence)}\n"
+            f"Ausgewertet: {result.documents_scanned} Dokument(e), "
+            f"{result.tables_used} von {result.tables_scanned} Tabelle(n) genutzt",
+            title=f"Artikel {escape(result.tender_id)}",
+        )
+    )
+
+    if shown:
+        table = Table(title="Positionen", header_style="bold")
+        table.add_column("Pos.", style="dim")
+        table.add_column("Bezeichnung", overflow="fold")
+        table.add_column("Menge", justify="right")
+        table.add_column("Einheit")
+        table.add_column("Hersteller / Typ", overflow="fold")
+        table.add_column("Konf.", justify="right")
+        for item in shown:
+            brand = " / ".join(filter(None, (item.manufacturer, item.model_number)))
+            if item.brand_locked:
+                brand = f"[red]{escape(brand)}[/red]"
+            elif brand:
+                brand = escape(brand)
+            table.add_row(
+                _safe(item.position, missing="-"),
+                _safe(item.title),
+                _quantity_cell(item),
+                escape(item.unit) if item.unit else "[dim]UNKNOWN[/dim]",
+                brand or "[dim]-[/dim]",
+                _confidence_cell(item.confidence),
+            )
+        console.print(table)
+    else:
+        console.print("[yellow]Keine Positionen erkannt.[/yellow]")
+
+    if show_evidence:
+        for item in shown:
+            source = item.provenance.document if item.provenance else None
+            page = item.provenance.page if item.provenance else None
+            console.print(
+                f"[dim]{_safe(item.position, missing='-')}[/dim] {_safe(source)}"
+                + (f", Seite {page}" if page else "")
+                + f"\n  {_safe(item.evidence())}"
+            )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]Hinweis[/yellow] {_safe(warning)}")
+    for item in shown:
+        for warning in item.warnings:
+            console.print(
+                f"[yellow]Hinweis[/yellow] {_safe(item.position, missing='-')}: {_safe(warning)}"
+            )
 
 
 @app.command("cache-clear")

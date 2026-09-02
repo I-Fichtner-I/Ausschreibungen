@@ -23,13 +23,13 @@ Stufe ein echter Zwischenstand vorhanden statt eines halbfertigen Ganzen.
 | Stufe | Inhalt | Status |
 |-------|--------|--------|
 | **1** | **Ausschreibungen recherchieren** - Quell-Adapter, einheitliches Datenmodell, Dubletten, Speicherung, Aenderungserkennung, Export, CLI | **fertig, testbar** |
-| 2 | Ausschreibung analysieren - Detailseiten, Dokumentendownload, PDF/DOCX/XLSX-Parsing, Anforderungen, Risiko-Score | offen |
-| 3 | Artikel extrahieren - Tabellenerkennung, `TenderItem`, Match-Confidence | offen |
+| **2** | **Ausschreibung analysieren** - Dokumentendownload, Textextraktion (PDF/DOCX/XLSX/HTML/CSV), Anforderungserkennung und begruendeter Risiko-Score | **fertig, testbar** |
+| **3** | **Artikel extrahieren** - Spaltenrollen und Einheiten erkennen, `TenderItem` mit Menge, Einheit, Hersteller/Typ, Merkmalen und Fundstelle | **fertig, testbar** |
 | 4 | Produkt-Matching und Preisrecherche - Lieferanten, `PriceOffer`, Preisstatistik | offen |
 | 5 | Kosten, Profitabilitaet, Szenarien, Score, Entscheidungsvorlage | offen |
 | 6 | Dashboard, Benachrichtigungen, Scheduler, Angebotsentwurf | offen |
 
-Die Stufen 2-6 haben ihre Andockpunkte bereits im Code: `Tender.documents`,
+Die Stufen 4-6 haben ihre Andockpunkte bereits im Code: `Tender.documents`,
 `TenderRequirements`, die Konfigurationsbloecke `criteria`/`scoring` und die
 Fremdschluessel-Konvention `tender_id` in der Datenbank.
 
@@ -48,11 +48,11 @@ Fremdschluessel-Konvention `tender_id` in der Datenbank.
    |  robots.txt)  |  strukturiertes Logging  |  Fehler     |
    +---------------------------+---------------------------+
                                |
-   +------------+------------+-+-----------+---------------+
-   |  sources/  | extraction/ |  matching/ |   pricing/    |   (Stufe 2-4)
-   |  TED, RSS, |  PDF, DOCX, |  Produkte  |  Lieferanten  |
-   |  Fixture   |  XLSX, HTML |            |  Preise       |
-   +------------+-------------+------------+---------------+
+   +-----------+------------+------------+-----------+--------+
+   | sources/  | extraction/|  analysis/ |  items/   |pricing/|  (Stufe 2-4)
+   | TED, RSS, | PDF, DOCX, | Anforderun-| Positionen| Liefe- |
+   | Fixture   | XLSX, HTML | gen, Risiko| Mengen    | ranten |
+   +-----------+------------+------------+-----------+--------+
                                |
                     +----------v----------+
                     |   Pipeline (ingest) |   Dubletten, Aenderungen
@@ -99,15 +99,43 @@ REGISTRATION / RESTRICTED - geschuetzte Unterlagen werden vermerkt, nicht
 umgangen), `TenderRequirements` (ab Stufe 2 gefuellt), `Provenance`,
 `EstimatedValue`.
 
+### Stufe 3 (implementiert)
+
+`TenderItem` - eine Position des Leistungsverzeichnisses: `position`, `title`,
+`description`, `quantity` (+ `quantity_estimated`), `unit` (normiert) und
+`unit_original`, `manufacturer`, `model_number`, `article_number`,
+`specifications`, `brand_locked`, `provenance` und `warnings`.
+
+Zwei getrennte Guetemasse, weil zwei verschiedene Dinge unsicher sein koennen:
+
+- `confidence` (0-100) - wie vollstaendig die **Zeile gelesen** wurde. Sie
+  erreicht nie 100: auch eine perfekt gefuellte Tabellenzeile bleibt eine
+  Auslegung des Dokuments.
+- `match_confidence` - Guete der **Produktzuordnung**. Bleibt `None` bis
+  Stufe 4; eine unsichere Zuordnung wird nicht durch eine Zahl kaschiert.
+
+`ItemExtractionResult` haelt daneben die Kennzahlen des Laufs (gescannte
+Dokumente und Tabellen, genutzte Tabellen, Warnungen), damit ein leeres
+Ergebnis erklaerbar bleibt: "keine Tabelle gefunden" ist etwas anderes als
+"keine Unterlagen vorhanden".
+
 ### Datenbank (Stufe 1)
 
 `tenders`, `tender_aliases` (weitere Fundstellen derselben Ausschreibung),
 `tender_documents`, `tender_changes` (Aenderungshistorie), `ingest_runs`
 (Laufprotokoll), `source_states` (Quellenstatus, Fehler in Folge).
 
-Geplant ab Stufe 3: `tender_items`, `suppliers`, `price_offers`,
-`cost_calculations`, `profitability_analyses`, `risk_analyses`,
-`analysis_history`.
+Seit Stufe 2: `document_extracts` (Text, Tabellen und Metadaten je Unterlage,
+1:1 zum Dokument - der Text bleibt aus den Listenabfragen heraus) und
+`risk_analyses` (Score, Stufe, begruendete Faktoren und Funde je Ausschreibung;
+der mitgespeicherte `content_hash` verhindert unnoetige Neubewertungen).
+
+Seit Stufe 3: `tender_items` (eine Zeile je erkannter Position, mit Fundstelle
+und Originalzeile) und `item_extractions` (Kennzahlen des Laufs je
+Ausschreibung, ebenfalls mit `content_hash` fuer den Stapellauf).
+
+Geplant ab Stufe 4: `suppliers`, `price_offers`, `cost_calculations`,
+`profitability_analyses`, `analysis_history`.
 
 ---
 
@@ -147,6 +175,7 @@ Die Pipeline muss dafuer nicht angefasst werden.
 | **Dubletten ueber Portale hinweg** | Dreistufige Erkennung; unterhalb der Schwelle wird bewusst nicht zusammengefuehrt. Primaerquelle nach konfigurierter Prioritaet. |
 | **Ausfall einer Quelle** | Jede Quelle ist gekapselt; Fehler landen im Lauf-Report und in `source_states`, der Lauf laeuft weiter. |
 | **Rate-Limits / Sperren** | Rate-Limit pro Host, robots.txt inkl. `Crawl-delay`, Exponential Backoff mit Jitter, `Retry-After` wird beachtet, Cache gegen unnoetige Wiederholungen. |
+| **Scheingenauigkeit beim Risiko-Score** | Der Score ist additiv und jeder Faktor nennt Punkte, Begruendung und Beleg aus dem Dokument. Fehlende Information senkt den Score nie, sondern erzeugt eigene Faktoren (`deadline_unknown`, `value_unknown`, `documents_missing`) - eine unbekannte Ausschreibung darf nicht unauffaellig wirken. |
 | **Falsche Produktzuordnung** (ab Stufe 3) | `match_confidence`; unterhalb der Schwelle keine Zuordnung, sondern `REQUIRES_REVIEW`. |
 
 ---
