@@ -217,8 +217,13 @@ Quellen wird robots.txt geprueft.
    nach eForms-Notation hinterlegt, ebenfalls in `config.yaml` korrigierbar,
    inklusive `raw_query`-Ausweg.
 3. **Weitere Quellen** (Datenservice Oeffentlicher Einkauf, Landesportale,
-   kommunale Portale): Stufe 2, jeweils erst nach Pruefung von API-Verfuegbar-
-   keit, robots.txt und Nutzungsbedingungen.
+   kommunale Portale): jeweils erst nach Pruefung von API-Verfuegbarkeit,
+   robots.txt und Nutzungsbedingungen. Fuer Portale ohne Schnittstelle gibt es
+   seit dem Vergabemarktplatz NRW den generischen `html_list`-Adapter: Zeilen-
+   und Feldselektoren stehen in `config.yaml`, `doctor` meldet je Feld die
+   Trefferquote. Ein neues Portal ist damit ein Konfigurationsblock statt eines
+   weiteren Parsers - und ein geaendertes Markup eine Zeile statt eines
+   Releases.
 4. **Scheduler**: Stufe 1 laeuft ueber cron/systemd (siehe README). Ein
    eigener Scheduler-Prozess lohnt erst, wenn mehrere Stufen zu takten sind.
 5. **KI-Einsatz**: bewusst noch nicht - in Stufe 1 gibt es keine Aufgabe, die

@@ -128,10 +128,88 @@ class FixtureSourceConfig(SourceConfig):
 
 
 #: type -> Konfigurationsklasse. Adapter registrieren hier ihre Klasse.
+class FieldSelector(BaseModel):
+    """Wo in einer Trefferzeile ein Feld steht.
+
+    Absichtlich datengetrieben: Portale aendern ihr Markup, ohne Bescheid zu
+    sagen. Ein geaenderter Selektor ist damit eine Zeile in config.yaml und
+    kein Codeaenderung-plus-Release.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    #: CSS-Selektor relativ zur Zeile; leer = die Zeile selbst.
+    selector: str | None = None
+    #: "text" oder ein Attributname ("href", "title", "datetime", ...).
+    attribute: str = "text"
+    #: Optionaler Ausdruck; die erste Gruppe (sonst der Treffer) gewinnt.
+    regex: str | None = None
+    #: Welcher Treffer, falls der Selektor mehrere Elemente findet.
+    index: int = 0
+
+
+class HtmlListSourceConfig(SourceConfig):
+    """Vergabeportal ohne API: Trefferliste als HTML auslesen.
+
+    Der Adapter ist bewusst generisch - die meisten deutschen Landesportale
+    laufen auf derselben Handvoll Produkte (AI Vergabemanager/VMP, Deutsche
+    eVergabe, cosinex). Ein neues Portal ist damit ein Konfigurationsblock.
+
+    Der Abruf laeuft ueber den normalen HTTP-Client und damit ueber robots.txt,
+    Rate-Limit und Cache. Es werden ausschliesslich oeffentlich erreichbare
+    Uebersichtsseiten gelesen - keine Anmeldung, kein Captcha, keine
+    Zugriffsbeschraenkung wird umgangen.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    type: str = "html_list"
+    #: Anzeigename des Portals (erscheint in Herkunft und Protokoll).
+    label: str | None = None
+    #: Basis fuer relative Links.
+    base_url: str
+    #: Einstiegsseite mit der Trefferliste.
+    list_url: str
+    country: str | None = None
+    region: str | None = None
+    #: Vergabestelle, falls die Liste sie nicht ausweist.
+    authority: str | None = None
+    #: Zeitzone der Fristangaben; Portale schreiben Ortszeit ohne Offset.
+    timezone: str = "Europe/Berlin"
+
+    #: CSS-Selektor der Trefferzeilen (z. B. "table.results tbody tr").
+    row_selector: str
+    #: Feldname -> Fundstelle. Bekannte Feldnamen siehe ``html_list.FIELDS``.
+    fields: dict[str, FieldSelector] = Field(default_factory=dict)
+    #: Zeilen ohne diese Felder gelten als Kopf- oder Layoutzeile.
+    required_fields: list[str] = Field(default_factory=lambda: ["title"])
+
+    #: Blaetterung ueber einen Query-Parameter (z. B. "page").
+    page_param: str | None = None
+    first_page: int = 1
+    max_pages: int = 1
+
+    #: Detailseite je Treffer nachladen - kostet einen Abruf pro Treffer.
+    follow_detail: bool = False
+    #: Obergrenze, damit ein Lauf das Portal nicht ueberrennt.
+    max_detail_requests: int = 25
+    detail_fields: dict[str, FieldSelector] = Field(default_factory=dict)
+    #: Query-Parameter der Detail-URL, der die Bekanntmachung eindeutig macht.
+    id_param: str | None = None
+
+    @field_validator("base_url", "list_url")
+    @classmethod
+    def _require_http_url(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("muss eine vollstaendige http(s)-URL sein")
+        return value.rstrip("/") if value.endswith("/") else value
+
+
 SOURCE_CONFIG_TYPES: dict[str, type[SourceConfig]] = {
     "ted": TedSourceConfig,
     "rss": RssSourceConfig,
     "fixture": FixtureSourceConfig,
+    "html_list": HtmlListSourceConfig,
 }
 
 

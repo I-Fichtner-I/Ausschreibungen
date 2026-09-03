@@ -275,7 +275,56 @@ Quelle, Dublettenerkennung, Aenderungserkennung, Export und die CLI.
 |--------|-----|-----------|
 | `ted` | offizielle EU-Such-API (TED) | Endpunkt, Feldliste und Query-Syntax sind in `config.yaml` konfigurierbar, weil TED seine API versioniert. Optionaler API-Key ueber `.env`. |
 | `bund_rss` | RSS | oeffentlicher Ausschreibungs-Feed von service.bund.de; weitere Feeds ohne Codeaenderung ergaenzbar |
+| `evergabe_nrw` | HTML-Trefferliste (`html_list`) | Vergabemarktplatz NRW. **Standardmaessig aus** - erst `tender-ai doctor --source evergabe_nrw` bestaetigt die Selektoren (siehe unten) |
 | `fixture` | lokale JSON-Datei | Demo- und Testquelle, kein Netzwerk |
+
+### Portale ohne Schnittstelle (`html_list`)
+
+Bietet ein Portal keine API und keinen Feed, bleibt die oeffentliche
+Trefferliste. Der `html_list`-Adapter macht daraus einen Konfigurationsblock
+statt eines handgeschriebenen Parsers: Zeilenselektor plus Feldselektoren
+stehen in `config.yaml`, ein geaendertes Markup ist damit eine
+Konfigurationsaenderung.
+
+```yaml
+evergabe_nrw:
+  enabled: false                     # erst nach der Pruefung unten einschalten
+  type: html_list
+  requests_per_second: 0.5           # bewusst langsam - fremde Infrastruktur
+  base_url: "https://www.evergabe.nrw.de"
+  list_url: "https://www.evergabe.nrw.de/VMPCenter/company/announcements/categoryOverview.do?method=show"
+  timezone: "Europe/Berlin"          # Fristen stehen dort als Ortszeit
+  row_selector: "table tr"
+  required_fields: ["title", "detail_url"]
+  fields:
+    title:         {selector: "a"}
+    detail_url:    {selector: "a", attribute: "href"}
+    contracting_authority: {selector: "td:nth-of-type(2)"}
+    submission_deadline:   {selector: "td:nth-of-type(3)"}
+```
+
+**Selektoren pruefen statt raten.** `tender-ai doctor --source evergabe_nrw`
+ruft die Liste einmal ab und meldet je Feld die Trefferquote:
+
+```
+evergabe_nrw  21 Zeile(n), davon 20 verwertbar | title 20/21, detail_url 20/21,
+              contracting_authority 20/21, submission_deadline 0/21
+              | ohne Treffer: submission_deadline
+```
+
+`submission_deadline 0/21` zeigt sofort auf den falschen Selektor - eine Zeile
+in `config.yaml`, kein Release. Findet der Zeilenselektor nichts oder ist keine
+Zeile verwertbar, meldet `doctor` die Quelle als **nicht ok**; ein leeres
+Ergebnis wird nie als Erfolg ausgegeben.
+
+Weitere Optionen: `page_param` + `max_pages` (Blaetterung), `follow_detail` +
+`detail_fields` (Detailseite nachladen, gedeckelt durch `max_detail_requests`),
+`id_param` (Query-Parameter als stabile Quell-ID), `regex` je Feld.
+
+Der Adapter ruft ausschliesslich frei erreichbare Seiten ueber den normalen
+HTTP-Client ab - mit robots.txt-Pruefung, Rate-Limit und Cache. Er meldet sich
+nirgends an und umgeht keine Zugriffsbeschraenkung. Vor dem Dauerbetrieb eines
+fremden Portals gehoert ausserdem ein Blick in dessen Nutzungsbedingungen.
 
 **Wichtiger Hinweis zur Abnahme:** Die Entwicklungsumgebung hatte keinen
 Netzzugang zu externen Portalen (die Netzwerkpolicy laesst nur Paketregistries

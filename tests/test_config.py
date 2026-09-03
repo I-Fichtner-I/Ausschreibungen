@@ -114,3 +114,27 @@ def test_feed_entries_are_validated(project_dir: Path):
     feed = settings.sources["feed"].feeds[0]
     assert feed.url == "https://x.invalid/f.xml"
     assert feed.name is None and feed.country == "DEU"
+
+
+def test_shipped_config_yaml_is_valid():
+    """Die mitgelieferte config.yaml muss selbst durch die Validierung gehen.
+
+    ``extra="forbid"`` faengt einen Tippfehler im Quellblock sonst erst beim
+    ersten Lauf ab - und dann beim Nutzer statt in der CI.
+    """
+    from tender_ai.config import HtmlListSourceConfig, SourceConfig
+
+    settings = load_settings(Path(__file__).resolve().parents[1] / "config.yaml")
+
+    assert settings.sources
+    for name, source in settings.sources.items():
+        assert isinstance(source, SourceConfig), name
+
+    portal = settings.sources["evergabe_nrw"]
+    assert isinstance(portal, HtmlListSourceConfig)
+    # Bewusst aus: die Selektoren sind erst mit "doctor" am echten Portal
+    # bestaetigt - eine Dauerquelle mit ungeprueften Selektoren erzeugt nur
+    # leere Laeufe und Fehlerzaehler.
+    assert portal.enabled is False
+    assert portal.list_url.startswith("https://www.evergabe.nrw.de/")
+    assert set(portal.required_fields) <= set(portal.fields)
