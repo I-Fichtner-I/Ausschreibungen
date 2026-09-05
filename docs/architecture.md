@@ -26,10 +26,10 @@ Stufe ein echter Zwischenstand vorhanden statt eines halbfertigen Ganzen.
 | **2** | **Ausschreibung analysieren** - Dokumentendownload, Textextraktion (PDF/DOCX/XLSX/HTML/CSV), Anforderungserkennung und begruendeter Risiko-Score | **fertig, testbar** |
 | **3** | **Artikel extrahieren** - Spaltenrollen und Einheiten erkennen, `TenderItem` mit Menge, Einheit, Hersteller/Typ, Merkmalen und Fundstelle | **fertig, testbar** |
 | **4** | **Produkt-Matching und Preisrecherche** - begruendete Zuordnung mit `match_confidence`, Preisquellen (Lieferantenlisten), Preisbild je Position | **fertig, testbar** |
-| 5 | Kosten, Profitabilitaet, Szenarien, Score, Entscheidungsvorlage | offen |
+| **5** | **Kosten, Profitabilitaet, Szenarien, Score, Entscheidungsvorlage** - Angebotspreis aus Selbstkosten, Marge gegen Mindestkriterien, Urteil nur bei tragfaehiger Datenlage | **fertig, testbar** |
 | 6 | Dashboard, Benachrichtigungen, Scheduler, Angebotsentwurf | offen |
 
-Die Stufen 5-6 haben ihre Andockpunkte bereits im Code: `Tender.documents`,
+Stufe 6 hat ihre Andockpunkte bereits im Code: `Tender.documents`,
 `TenderRequirements`, die Konfigurationsbloecke `criteria`/`scoring` und die
 Fremdschluessel-Konvention `tender_id` in der Datenbank.
 
@@ -142,6 +142,30 @@ vielen Angeboten es stammt (`is_single_source`) und wie weit sie auseinander-
 liegen (`spread_ratio`). Eine grosse Streuung ist das nuetzlichste Warnsignal
 der Stufe - sie bedeutet fast immer, dass ein unpassendes Produkt darunter ist.
 
+### Stufe 5 (implementiert)
+
+`PositionCost` (Einkauf, Versand, Zuschlaege, Angebotspreis, Marge je Position),
+`Scenario` (drei Rechenfaelle), `CriterionResult` (Soll, Ist, bestanden) und
+`TenderCalculation` als Entscheidungsvorlage.
+
+Drei Entscheidungen tragen die Stufe:
+
+1. **Die Szenarien halten den Angebotspreis fest.** Geboten wird einmal,
+   eingekauft wird spaeter. Waechst der Angebotspreis mit dem Einkauf mit, ist
+   die Marge rechnerisch in jedem Fall gleich - die Tabelle saehe aus wie eine
+   Aussage und waere keine.
+2. **Eine unvollstaendige Preisbasis ergibt keine Bewertung.** Unterhalb
+   `calculation.minimum_coverage_percent` ist das Urteil NOT_ASSESSABLE, nicht
+   "uninteressant".
+3. **Was nicht geprueft werden konnte, ist nicht bestanden.** Ein Kriterium ohne
+   Daten gilt als offen und faellt durch; ein fehlender Risikowert bringt keine
+   Punkte. Sonst saehe eine Luecke aus wie ein gutes Ergebnis.
+
+Der Ablauf aus dem Auftrag bleibt zwingend: Analyse -> Freigabe durch den
+Nutzer -> Angebotsentwurf -> manuelle Pruefung -> manuelle Abgabe. Die
+maschinelle Ausgabe traegt das mit (`is_binding_offer`,
+`requires_user_approval`).
+
 ### Datenbank (Stufe 1)
 
 `tenders`, `tender_aliases` (weitere Fundstellen derselben Ausschreibung),
@@ -161,8 +185,11 @@ Seit Stufe 4: `price_quotes` (ein Angebot je Position, mit Zuordnungsguete,
 Begruendungen, Einwaenden und Abrufzeitpunkt - Preise altern) und
 `price_research` (Kennzahlen des Laufs je Ausschreibung, mit `content_hash`).
 
-Geplant ab Stufe 5: `cost_calculations`, `profitability_analyses`,
-`analysis_history`.
+Seit Stufe 5: `calculations` (Urteil, Score, Abdeckung, Erwartungsfall sowie
+Szenarien, Kriterien und Positionen als JSON - die Begruendung bleibt erhalten
+statt aus dem Score zurueckgerechnet zu werden).
+
+Geplant ab Stufe 6: `analysis_history`, Freigabe-Protokoll.
 
 ---
 

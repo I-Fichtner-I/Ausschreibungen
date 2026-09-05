@@ -181,6 +181,19 @@ pricing:
   # ein erfundener Kurs waere ein erfundener Preis.
   currencies: ["EUR"]
 
+# --- Kalkulation (Stufe 5) ---------------------------------------------------
+# Aus Einkaufspreisen wird ein Angebotspreis. Das Ergebnis ist eine
+# Entscheidungsvorlage - kein Angebot und keine Abgabe.
+calculation:
+  markup_percent: 25.0            # Aufschlag auf die Selbstkosten
+  overhead_percent: 8.0           # Gemeinkosten auf den Einkaufswert
+  handling_cost_per_position: 0.0 # Pauschale je Position (Bestellung, Handling)
+  fixed_cost_per_tender: 0.0      # Pauschale je Auftrag (Angebotserstellung)
+  include_shipping: true          # Versandkosten aus den Angeboten mitrechnen
+  # Ohne diese Abdeckung wird nicht bewertet: die Marge eines Bruchteils der
+  # Positionen ist nicht die Marge des Auftrags.
+  minimum_coverage_percent: 80
+
 # --- Dubletten ---------------------------------------------------------------
 dedup:
   enabled: true

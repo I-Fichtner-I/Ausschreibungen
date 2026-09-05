@@ -108,6 +108,9 @@ class TenderRecord(Base):
     price_research: Mapped[PriceResearchRecord | None] = relationship(
         back_populates="tender", cascade="all, delete-orphan", uselist=False
     )
+    calculation: Mapped[CalculationRecord | None] = relationship(
+        back_populates="tender", cascade="all, delete-orphan", uselist=False
+    )
 
     __table_args__ = (Index("ix_tenders_source_source_id", "source", "source_id", unique=True),)
 
@@ -390,6 +393,44 @@ class PriceQuoteRecord(Base):
     retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     item: Mapped[TenderItemRecord] = relationship(back_populates="quotes")
+
+
+class CalculationRecord(Base):
+    """Kalkulation und Entscheidungsvorlage einer Ausschreibung (Stufe 5).
+
+    Ausdruecklich kein Angebot: ``user_decision`` auf ``TenderRecord`` bleibt
+    die einzige Stelle, an der ein Mensch etwas freigibt.
+    """
+
+    __tablename__ = "calculations"
+
+    tender_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tenders.id", ondelete="CASCADE"), primary_key=True
+    )
+    verdict: Mapped[str] = mapped_column(String(32), default="NOT_ASSESSABLE", index=True)
+    score: Mapped[int | None] = mapped_column(Integer, default=None, index=True)
+    coverage_percent: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    currency: Mapped[str | None] = mapped_column(String(8), default=None)
+
+    position_count: Mapped[int] = mapped_column(Integer, default=0)
+    calculated_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: Erwartungsfall - die Zahlen, auf die jemand schaut.
+    cost_total: Mapped[float | None] = mapped_column(Float, default=None)
+    sale_total: Mapped[float | None] = mapped_column(Float, default=None)
+    margin_absolute: Mapped[float | None] = mapped_column(Float, default=None)
+    margin_percent: Mapped[float | None] = mapped_column(Float, default=None, index=True)
+    roi_percent: Mapped[float | None] = mapped_column(Float, default=None)
+
+    scenarios: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    criteria: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    positions: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    review_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    content_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    tender: Mapped[TenderRecord] = relationship(back_populates="calculation")
 
 
 class IngestRunRecord(Base):

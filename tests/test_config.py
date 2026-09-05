@@ -140,6 +140,11 @@ def test_shipped_config_yaml_is_valid():
     assert Path(price_list.path).exists(), "Beispielpreisliste fehlt"
     assert price_list.default_basis == "NET"
 
+    # Stufe 5: eine Abdeckungsschwelle von 0 wuerde die wichtigste Sperre
+    # aushebeln - eine Marge auf einem Bruchteil der Positionen.
+    assert 0 < settings.calculation.minimum_coverage_percent <= 100
+    assert settings.calculation.markup_percent > 0
+
     portal = settings.sources["evergabe_nrw"]
     assert isinstance(portal, HtmlListSourceConfig)
     # Bewusst aus: die Selektoren sind erst mit "doctor" am echten Portal

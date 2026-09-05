@@ -40,6 +40,8 @@ from .models.tender import Tender
 from .services import (
     analyze_open_tenders,
     analyze_tender,
+    calculate_open_tenders,
+    calculate_tender,
     check_sources,
     extract_items_for_open_tenders,
     extract_tender_items,
@@ -1159,6 +1161,205 @@ def prices(
         console.print(
             f"[red]Preisquelle gestoert[/red] {escape(failure['source'])}: "
             f"{escape(failure['error'])}"
+        )
+
+
+VERDICT_COLOURS = {
+    "VERY_INTERESTING": "bold green",
+    "INTERESTING": "green",
+    "REVIEW": "yellow",
+    "RATHER_UNINTERESTING": "dim",
+    "UNSUITABLE": "red",
+    "NOT_ASSESSABLE": "bold yellow",
+}
+VERDICT_LABELS = {
+    "VERY_INTERESTING": "SEHR INTERESSANT",
+    "INTERESTING": "INTERESSANT",
+    "REVIEW": "PRUEFEN",
+    "RATHER_UNINTERESTING": "EHER UNINTERESSANT",
+    "UNSUITABLE": "NICHT GEEIGNET",
+    "NOT_ASSESSABLE": "NICHT BEWERTBAR",
+}
+
+
+def _verdict_cell(verdict: str) -> str:
+    colour = VERDICT_COLOURS.get(verdict, "white")
+    return f"[{colour}]{escape(VERDICT_LABELS.get(verdict, verdict))}[/{colour}]"
+
+
+@app.command()
+def calculate(
+    tender_id: str | None = typer.Argument(
+        None, help="Tender-ID oder Quell-ID; entfaellt bei --all"
+    ),
+    config: Path | None = typer.Option(None, "--config"),
+    calculate_all: bool = typer.Option(
+        False, "--all", help="alle laufenden Ausschreibungen mit Preisen kalkulieren"
+    ),
+    limit: int = typer.Option(50, "--limit", "-n", help="max. Ausschreibungen bei --all"),
+    show_positions: bool = typer.Option(
+        False, "--positions", help="Kosten und Marge je Position anzeigen"
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Kosten, Marge und Entscheidungsvorlage berechnen (Stufe 5).
+
+    Erzeugt KEIN Angebot: das Ergebnis ist eine Rechnung zur Vorlage. Die
+    Abgabe erfolgt nach Freigabe und Pruefung von Hand.
+    """
+    settings = _settings(config)
+
+    if calculate_all:
+        report = calculate_open_tenders(settings, limit=limit)
+        if json_output:
+            console.print_json(jsonlib.dumps(report.as_dict(), ensure_ascii=False, default=str))
+            return
+        table = Table(title=f"Entscheidungsvorlage ({report.count})", header_style="bold")
+        table.add_column("Urteil")
+        table.add_column("Score", justify="right")
+        table.add_column("Marge", justify="right")
+        table.add_column("Abdeckung", justify="right")
+        table.add_column("ID", style="dim", overflow="fold")
+        for result in sorted(report.calculated, key=lambda item: -(item.score or -1)):
+            expected = result.expected
+            table.add_row(
+                _verdict_cell(str(result.verdict)),
+                str(result.score) if result.score is not None else "[dim]-[/dim]",
+                (
+                    f"{expected.margin_percent:.1f} %"
+                    if expected and expected.margin_percent is not None
+                    else "[dim]UNKNOWN[/dim]"
+                ),
+                _coverage_cell(result.coverage_percent),
+                escape(result.tender_id),
+            )
+        console.print(table)
+        for failure in report.failed:
+            console.print(
+                f"[red]Kalkulation fehlgeschlagen[/red] {escape(failure['tender_id'])}: "
+                f"{escape(failure['error'])}"
+            )
+        console.print(
+            "\n[dim]Vorschlaege zur Pruefung - kein Angebot. Die Abgabe erfolgt "
+            "nach Freigabe von Hand.[/dim]"
+        )
+        return
+
+    if not tender_id:
+        console.print("[red]Bitte eine Tender-ID angeben oder --all verwenden.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        result = calculate_tender(settings, tender_id)
+    except ConfigError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        console.print_json(jsonlib.dumps(result.as_dict(), ensure_ascii=False, default=str))
+        return
+
+    expected = result.expected
+    currency = result.currency or ""
+    body = [
+        f"Urteil: {_verdict_cell(str(result.verdict))}"
+        + (f"  (Score {result.score}/100)" if result.score is not None else ""),
+        (
+            f"Abdeckung: {_coverage_cell(result.coverage_percent)} "
+            f"({result.calculated_count} von {len(result.positions)} Positionen kalkuliert)"
+        ),
+    ]
+    if expected and expected.margin_percent is not None:
+        body.append(
+            f"Erwartungsfall: Kosten {_money(expected.cost_total, currency)}, "
+            f"Angebotspreis {_money(expected.sale_total, currency)}, "
+            f"Marge {_money(expected.margin_absolute, currency)} "
+            f"({expected.margin_percent:.1f} %)"
+        )
+    if result.tender_estimated_value is not None:
+        body.append(
+            f"Geschaetzter Auftragswert der Vergabestelle: "
+            f"{_money(result.tender_estimated_value, currency)} [dim](Schaetzung)[/dim]"
+        )
+    console.print(Panel("\n".join(body), title=f"Kalkulation {escape(result.tender_id)}"))
+
+    if len(result.scenarios) > 1:
+        table = Table(title="Szenarien (aus den tatsaechlichen Angeboten)", header_style="bold")
+        table.add_column("Fall")
+        table.add_column("Kosten", justify="right")
+        table.add_column("Angebotspreis", justify="right")
+        table.add_column("Marge", justify="right")
+        table.add_column("Marge %", justify="right")
+        table.add_column("Rendite %", justify="right")
+        labels = {
+            "BEST": "guenstigster Einkauf",
+            "EXPECTED": "Median",
+            "WORST": "teuerster Einkauf",
+        }
+        for scenario in result.scenarios:
+            name = str(scenario.kind)
+            table.add_row(
+                escape(labels.get(name, name)),
+                _money(scenario.cost_total, currency),
+                _money(scenario.sale_total, currency),
+                _money(scenario.margin_absolute, currency),
+                f"{scenario.margin_percent:.1f}" if scenario.margin_percent is not None else "-",
+                f"{scenario.roi_percent:.1f}" if scenario.roi_percent is not None else "-",
+            )
+        console.print(table)
+
+    if result.criteria:
+        table = Table(title="Mindestkriterien", header_style="bold")
+        table.add_column("")
+        table.add_column("Kriterium")
+        table.add_column("Gefordert", justify="right")
+        table.add_column("Erreicht", justify="right")
+        for criterion in result.criteria:
+            mark = "[green]ok[/green]" if criterion.passed else "[red]nein[/red]"
+            if criterion.undetermined:
+                mark = "[yellow]offen[/yellow]"
+            table.add_row(
+                mark,
+                _safe(criterion.label),
+                _safe(criterion.required),
+                _safe(criterion.actual),
+            )
+        console.print(table)
+
+    if show_positions:
+        table = Table(title="Positionen", header_style="bold")
+        table.add_column("Pos.", style="dim")
+        table.add_column("Bezeichnung", overflow="fold")
+        table.add_column("Menge", justify="right")
+        table.add_column("EK/Einheit", justify="right")
+        table.add_column("Kosten", justify="right")
+        table.add_column("Angebot", justify="right")
+        table.add_column("Marge %", justify="right")
+        for position in result.positions:
+            table.add_row(
+                _safe(position.position, missing="-"),
+                _safe(position.title),
+                _safe(position.quantity, missing="-"),
+                _money(position.unit_purchase_price, currency),
+                _money(position.cost_total, currency),
+                _money(position.sale_total, currency),
+                (
+                    f"{position.margin_percent:.1f}"
+                    if position.margin_percent is not None
+                    else "[dim]-[/dim]"
+                ),
+            )
+        console.print(table)
+
+    for warning in result.warnings:
+        console.print(f"[yellow]Hinweis[/yellow] {_safe(warning)}")
+    if result.review_notes:
+        console.print(
+            Panel(
+                "\n".join(f"- {_safe(note)}" for note in result.review_notes),
+                title="Vor der Freigabe pruefen",
+                border_style="yellow",
+            )
         )
 
 

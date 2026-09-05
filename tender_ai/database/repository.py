@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..config import DedupConfig
 from ..models.analysis import AnalysisResult
+from ..models.calculation import TenderCalculation
 from ..models.common import Provenance, blocking_key, normalize_text, utcnow
 from ..models.document import ExtractedDocument
 from ..models.item import ItemExtractionResult, TenderItem
@@ -25,6 +26,7 @@ from ..models.price import PricingResult
 from ..models.tender import Tender, TenderDocument, TenderStatus
 from ..pipeline.dedup import DuplicateDetector, DuplicateMatch
 from .models import (
+    CalculationRecord,
     DocumentExtractRecord,
     IngestRunRecord,
     ItemExtractionRecord,
@@ -620,6 +622,41 @@ class TenderRepository:
 
     def price_research_for(self, tender_id: str) -> PriceResearchRecord | None:
         return self.session.get(PriceResearchRecord, tender_id)
+
+    def save_calculation(
+        self, calculation: TenderCalculation, tender_record: TenderRecord | None = None
+    ) -> CalculationRecord:
+        """Kalkulation speichern - je Ausschreibung die jeweils aktuelle."""
+        record = self.session.get(CalculationRecord, calculation.tender_id)
+        if record is None:
+            record = CalculationRecord(tender_id=calculation.tender_id)
+            self.session.add(record)
+        if tender_record is not None:
+            record.content_hash = tender_record.content_hash
+
+        expected = calculation.expected
+        record.verdict = str(calculation.verdict)
+        record.score = calculation.score
+        record.coverage_percent = calculation.coverage_percent
+        record.currency = calculation.currency
+        record.position_count = len(calculation.positions)
+        record.calculated_count = calculation.calculated_count
+        record.cost_total = expected.cost_total if expected else None
+        record.sale_total = expected.sale_total if expected else None
+        record.margin_absolute = expected.margin_absolute if expected else None
+        record.margin_percent = expected.margin_percent if expected else None
+        record.roi_percent = expected.roi_percent if expected else None
+        record.scenarios = _json_ready([s.as_dict() for s in calculation.scenarios])
+        record.criteria = _json_ready([c.as_dict() for c in calculation.criteria])
+        record.positions = _json_ready([p.as_dict() for p in calculation.positions])
+        record.warnings = list(calculation.warnings)
+        record.review_notes = list(calculation.review_notes)
+        record.calculated_at = calculation.calculated_at
+        self.session.flush()
+        return record
+
+    def calculation_for(self, tender_id: str) -> CalculationRecord | None:
+        return self.session.get(CalculationRecord, tender_id)
 
     def save_requirements(self, record: TenderRecord, tender: Tender) -> None:
         """Erkannte Anforderungen im Tender-Payload festhalten."""
