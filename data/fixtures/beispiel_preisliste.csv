@@ -1,0 +1,6 @@
+Artikelnummer;Bezeichnung;Hersteller;Typ;Preis;Waehrung;Preisbasis;MwSt;Einheit;Staffelpreise;Versandkosten;Mindestmenge;Verfuegbarkeit;Lieferzeit;Lieferant;Preisstand
+MX27-001;Monitor 27 Zoll IPS entspiegelt;Muster GmbH;MX-27;189,00;EUR;netto;19;STK;50:179,00|100:172,50;0,00;1;Lager;3;Muster Distribution;2026-08-15
+DS4711;Dockingstation USB-C 100 W;Docking AG;DS-4711;92,50;EUR;netto;19;STK;;0,00;1;Lager;5;Muster Distribution;2026-08-15
+TIS160;Schreibtisch 160x80 cm hoehenverstellbar;Tischwerk;HV-160;349,00;EUR;netto;19;STK;20:329,00;49,00;1;Auf Bestellung;21;Muster Distribution;2026-08-15
+HAL-01;Monitorhalterung Stahl zweiarmig;Halterix;MH-2;54,90;EUR;netto;19;STK;;0,00;1;Lager;3;Muster Distribution;2026-08-15
+MON27-B;Monitor 27 Zoll IPS;Andere AG;ZZ-1;119,00;EUR;netto;19;STK;;0,00;1;Lager;7;Zweitlieferant;2026-08-20

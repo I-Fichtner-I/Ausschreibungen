@@ -105,6 +105,9 @@ class TenderRecord(Base):
     item_extraction: Mapped[ItemExtractionRecord | None] = relationship(
         back_populates="tender", cascade="all, delete-orphan", uselist=False
     )
+    price_research: Mapped[PriceResearchRecord | None] = relationship(
+        back_populates="tender", cascade="all, delete-orphan", uselist=False
+    )
 
     __table_args__ = (Index("ix_tenders_source_source_id", "source", "source_id", unique=True),)
 
@@ -308,6 +311,85 @@ class TenderItemRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     tender: Mapped[TenderRecord] = relationship(back_populates="items")
+    quotes: Mapped[list[PriceQuoteRecord]] = relationship(
+        back_populates="item", cascade="all, delete-orphan"
+    )
+
+
+class PriceResearchRecord(Base):
+    """Lauf der Preisrecherche je Ausschreibung (Stufe 4)."""
+
+    __tablename__ = "price_research"
+
+    tender_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tenders.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    #: Positionen mit mindestens einem kalkulationsfaehigen Angebot.
+    usable_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    coverage_percent: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    sources_used: Mapped[list[str]] = mapped_column(JSON, default=list)
+    sources_failed: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+    #: Inhalts-Hash der Ausschreibung zum Rechercheszeitpunkt (Stapellauf).
+    content_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    researched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    tender: Mapped[TenderRecord] = relationship(back_populates="price_research")
+
+
+class PriceQuoteRecord(Base):
+    """Ein Angebot zu einer Position - mit Herkunft und Zuordnungsguete.
+
+    Preise altern: ohne ``retrieved_at`` waere spaeter nicht zu sagen, ob eine
+    Kalkulation auf einem Preis von gestern oder vom letzten Jahr beruht.
+    """
+
+    __tablename__ = "price_quotes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("tender_items.id", ondelete="CASCADE"), index=True
+    )
+    tender_id: Mapped[str] = mapped_column(
+        String(255), ForeignKey("tenders.id", ondelete="CASCADE"), index=True
+    )
+    #: Reihenfolge der Bewertung - bestes Angebot zuerst.
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    supplier: Mapped[str] = mapped_column(String(255), index=True)
+    product_name: Mapped[str] = mapped_column(Text)
+    manufacturer: Mapped[str | None] = mapped_column(String(255), default=None)
+    model_number: Mapped[str | None] = mapped_column(String(255), default=None)
+    article_number: Mapped[str | None] = mapped_column(String(128), default=None)
+
+    amount: Mapped[float | None] = mapped_column(Float, default=None)
+    currency: Mapped[str | None] = mapped_column(String(8), default=None)
+    basis: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    vat_rate: Mapped[float | None] = mapped_column(Float, default=None)
+    #: Abgeleiteter Nettobetrag; ``None``, wenn er sich nicht ableiten laesst.
+    net_amount: Mapped[float | None] = mapped_column(Float, default=None)
+    unit: Mapped[str | None] = mapped_column(String(16), default=None)
+    tiers: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+
+    shipping_cost: Mapped[float | None] = mapped_column(Float, default=None)
+    shipping_included: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    min_order_quantity: Mapped[float | None] = mapped_column(Float, default=None)
+    availability: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    lead_time_days: Mapped[int | None] = mapped_column(Integer, default=None)
+
+    match_confidence: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
+    concerns: Mapped[list[str]] = mapped_column(JSON, default=list)
+    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    url: Mapped[str | None] = mapped_column(Text, default=None)
+    document: Mapped[str | None] = mapped_column(Text, default=None)
+    original_text: Mapped[str | None] = mapped_column(Text, default=None)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    item: Mapped[TenderItemRecord] = relationship(back_populates="quotes")
 
 
 class IngestRunRecord(Base):

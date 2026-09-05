@@ -87,11 +87,99 @@ sources:
         country: "DEU"
         authority: null         # falls der Feed genau eine Vergabestelle abbildet
 
+  # Vergabemarktplatz NRW - Landesportal ohne oeffentliche Schnittstelle.
+  # Gelesen wird ausschliesslich die frei erreichbare Trefferliste, ueber den
+  # normalen HTTP-Client und damit mit robots.txt-Pruefung und Rate-Limit.
+  #
+  # WICHTIG - vor dem Aktivieren einmal pruefen:
+  #   tender-ai doctor --source evergabe_nrw
+  # Der Health-Check meldet je Feld, in wie vielen Zeilen es gefunden wurde
+  # ("title 20/21, submission_deadline 0/21"). Erst wenn die Pflichtfelder
+  # Treffer liefern, ergibt ein Dauerbetrieb Sinn - bis dahin bleibt die Quelle
+  # aus, statt bei jedem Lauf leere Ergebnisse und Fehlerzaehler zu erzeugen.
+  # Die Selektoren unten sind ein Startpunkt und ohne Codeaenderung anpassbar.
+  evergabe_nrw:
+    enabled: false
+    type: html_list
+    priority: 40
+    requests_per_second: 0.5    # bewusst langsam - fremde Infrastruktur
+    label: "Vergabemarktplatz NRW"
+    base_url: "https://www.evergabe.nrw.de"
+    list_url: "https://www.evergabe.nrw.de/VMPCenter/company/announcements/categoryOverview.do?method=show"
+    country: "DEU"
+    region: "Nordrhein-Westfalen"
+    timezone: "Europe/Berlin"   # Fristen stehen dort als Ortszeit ohne Offset
+    row_selector: "table tr"
+    required_fields: ["title", "detail_url"]
+    id_param: "id"              # Query-Parameter der Detail-URL als Quell-ID
+    max_pages: 1
+    follow_detail: false        # erst einschalten, wenn die Liste stimmt
+    fields:
+      title:
+        selector: "a"
+      detail_url:
+        selector: "a"
+        attribute: "href"
+      contracting_authority:
+        selector: "td:nth-of-type(2)"
+      submission_deadline:
+        selector: "td:nth-of-type(3)"
+    # Beispiel fuer die Detailseite - Selektoren erst nach Pruefung setzen:
+    # detail_fields:
+    #   description: {selector: "div.description"}
+    #   national_id: {selector: "div.reference"}
+
   fixture:
     enabled: false              # Offline-Demoquelle (data/fixtures/*.json)
     type: fixture
     priority: 90
     path: "data/fixtures/sample_tenders.json"
+
+# --- Preisquellen (Stufe 4) --------------------------------------------------
+# Bevorzugt werden Lieferantenpreislisten: der Einkaufspreis aus der eigenen
+# Liste ist der Preis, zu dem tatsaechlich beschafft wird - ein Schaufenster-
+# preis ist es nicht. Formate: CSV, XLSX, JSON.
+price_sources:
+  beispiel_liste:
+    enabled: false            # Demoliste; eigene Liste eintragen und aktivieren
+    type: catalog
+    priority: 10
+    path: "data/fixtures/beispiel_preisliste.csv"
+    supplier: "Beispiel-Distribution"
+    # Ausdrueckliche Ansage, falls die Liste die Bezugsgroesse nicht je Zeile
+    # ausweist. Ohne diese Angabe bleibt sie UNKNOWN - das Tool raet nicht, ob
+    # ein Preis netto oder brutto ist.
+    default_basis: "netto"
+    default_vat_rate: 0.19
+    default_currency: "EUR"
+    # Spaltenzuordnung: logischer Name -> Ueberschrift in der Datei. Nur
+    # abweichende Spalten muessen genannt werden.
+    columns:
+      product_name: "Bezeichnung"
+      manufacturer: "Hersteller"
+      model_number: "Typ"
+      article_number: "Artikelnummer"
+      amount: "Preis"
+      currency: "Waehrung"
+      basis: "Preisbasis"
+      vat_rate: "MwSt"
+      unit: "Einheit"
+      tiers: "Staffelpreise"        # "50:179,00|100:172,50"
+      shipping_cost: "Versandkosten"
+      min_order_quantity: "Mindestmenge"
+      availability: "Verfuegbarkeit"
+      lead_time_days: "Lieferzeit"
+      supplier: "Lieferant"
+      price_date: "Preisstand"
+
+# --- Preisrecherche ----------------------------------------------------------
+pricing:
+  max_offers_per_item: 10     # Angebote je Position, die behalten werden
+  max_items: 200              # Positionen je Ausschreibung
+  spread_warning_ratio: 0.5   # Warnung ab dieser Preisstreuung (Anteil Median)
+  # Waehrungen, mit denen gerechnet wird. Es wird bewusst NICHT umgerechnet -
+  # ein erfundener Kurs waere ein erfundener Preis.
+  currencies: ["EUR"]
 
 # --- Dubletten ---------------------------------------------------------------
 dedup:

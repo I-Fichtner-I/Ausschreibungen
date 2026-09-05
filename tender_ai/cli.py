@@ -44,6 +44,8 @@ from .services import (
     extract_items_for_open_tenders,
     extract_tender_items,
     fetch_documents,
+    research_and_store,
+    research_open_tenders,
     run_search,
 )
 from .sources.base import SearchQuery
@@ -853,6 +855,12 @@ def _confidence_cell(confidence: int) -> str:
     return f"[{colour}]{confidence}[/{colour}]"
 
 
+def _coverage_cell(percent: int) -> str:
+    """Abdeckung einfaerben - unter 50 Prozent traegt keine Kalkulation."""
+    colour = "green" if percent >= 80 else ("yellow" if percent >= 50 else "red")
+    return f"[{colour}]{percent} %[/{colour}]"
+
+
 def _quantity_cell(item: Any) -> str:
     """Menge inklusive Schaetz-Kennzeichnung; unbekannt bleibt UNKNOWN."""
     if item.quantity is None:
@@ -985,6 +993,173 @@ def items(
             console.print(
                 f"[yellow]Hinweis[/yellow] {_safe(item.position, missing='-')}: {_safe(warning)}"
             )
+
+
+def _money(amount: float | None, currency: str | None = None) -> str:
+    """Betrag in deutscher Schreibweise; fehlender Betrag bleibt UNKNOWN."""
+    if amount is None:
+        return "[dim]UNKNOWN[/dim]"
+    text = f"{amount:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
+    return f"{text} {escape(currency)}" if currency else text
+
+
+@app.command()
+def prices(
+    tender_id: str | None = typer.Argument(
+        None, help="Tender-ID oder Quell-ID; entfaellt bei --all"
+    ),
+    config: Path | None = typer.Option(None, "--config"),
+    source: list[str] | None = typer.Option(
+        None, "--source", "-s", help="nur diese Preisquelle(n) verwenden"
+    ),
+    min_confidence: int | None = typer.Option(
+        None,
+        "--min-confidence",
+        help="Zuordnungsguete, ab der ein Angebot kalkulationsfaehig ist "
+        "(Default: criteria.minimum_match_confidence)",
+    ),
+    research_all: bool = typer.Option(
+        False, "--all", help="alle laufenden Ausschreibungen mit Positionen bepreisen"
+    ),
+    limit: int = typer.Option(50, "--limit", "-n", help="max. Ausschreibungen bei --all"),
+    show_offers: bool = typer.Option(
+        False, "--offers", help="alle Angebote je Position mit Begruendung anzeigen"
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Preise zu den erkannten Positionen recherchieren (Stufe 4)."""
+    settings = _settings(config)
+
+    if research_all:
+        report = asyncio.run(research_open_tenders(settings, limit=limit))
+        if json_output:
+            console.print_json(jsonlib.dumps(report.as_dict(), ensure_ascii=False, default=str))
+            return
+        table = Table(title=f"Preisrecherche ({report.count})", header_style="bold")
+        table.add_column("Abdeckung", justify="right")
+        table.add_column("kalkulierbar", justify="right")
+        table.add_column("Positionen", justify="right")
+        table.add_column("ID", style="dim", overflow="fold")
+        for result in sorted(report.researched, key=lambda item: -item.coverage_percent):
+            table.add_row(
+                _coverage_cell(result.coverage_percent),
+                str(result.usable_count),
+                str(len(result.items)),
+                escape(result.tender_id),
+            )
+        console.print(table)
+        for failure in report.failed:
+            console.print(
+                f"[red]Preisrecherche fehlgeschlagen[/red] {escape(failure['tender_id'])}: "
+                f"{escape(failure['error'])}"
+            )
+        return
+
+    if not tender_id:
+        console.print("[red]Bitte eine Tender-ID angeben oder --all verwenden.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        result = asyncio.run(
+            research_and_store(
+                settings,
+                tender_id,
+                only_sources=list(source) if source else None,
+                minimum_confidence=min_confidence,
+            )
+        )
+    except ConfigError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        console.print_json(jsonlib.dumps(result.as_dict(), ensure_ascii=False, default=str))
+        return
+
+    threshold = (
+        min_confidence if min_confidence is not None else settings.criteria.minimum_match_confidence
+    )
+    console.print(
+        Panel.fit(
+            f"Positionen: {len(result.items)}, kalkulationsfaehig: "
+            f"[bold]{result.usable_count}[/bold] "
+            f"({_coverage_cell(result.coverage_percent)} Abdeckung)\n"
+            f"Quellen: {_safe(result.sources_used)} | "
+            f"Zuordnungsguete ab {threshold} Punkten",
+            title=f"Preise {escape(result.tender_id)}",
+        )
+    )
+
+    if result.items:
+        table = Table(title="Preisbild je Position", header_style="bold")
+        table.add_column("Pos.", style="dim")
+        table.add_column("Bezeichnung", overflow="fold")
+        table.add_column("Menge", justify="right")
+        table.add_column("Bester Preis", justify="right")
+        table.add_column("Guete", justify="right")
+        table.add_column("Angebote", justify="right")
+        table.add_column("Spanne", justify="right")
+        for item in result.items:
+            best = item.best_match
+            statistics = item.statistics
+            usable = statistics.usable_count > 0
+            net = best.quote.net_amount(item.quantity)[0] if best else None
+            table.add_row(
+                _safe(item.position, missing="-"),
+                _safe(item.title),
+                _safe(item.quantity, missing="-"),
+                _money(net, statistics.currency) if usable else "[dim]UNKNOWN[/dim]",
+                _confidence_cell(best.match_confidence) if best else "[dim]-[/dim]",
+                str(statistics.offer_count),
+                (
+                    f"{_money(statistics.minimum)} - {_money(statistics.maximum)}"
+                    if statistics.usable_count > 1
+                    else "[dim]-[/dim]"
+                ),
+            )
+        console.print(table)
+
+    if show_offers:
+        for item in result.items:
+            if not item.matches:
+                continue
+            console.print(f"\n[bold]{_safe(item.position, missing='-')} {_safe(item.title)}[/bold]")
+            offers = Table(header_style="bold", show_edge=False)
+            offers.add_column("Guete", justify="right")
+            offers.add_column("Lieferant")
+            offers.add_column("Produkt", overflow="fold")
+            offers.add_column("Preis", justify="right")
+            offers.add_column("Basis")
+            offers.add_column("Begruendung", overflow="fold")
+            for match in item.matches:
+                quote = match.quote
+                # Begruendungen enthalten Fremdtext (Hersteller-, Produktnamen):
+                # erst escapen, dann einfaerben - sonst faerbt eine Preisliste
+                # die Ausgabe ein.
+                notes = [escape(reason) for reason in match.reasons]
+                notes += [f"[yellow]{escape(concern)}[/yellow]" for concern in match.concerns]
+                offers.add_row(
+                    _confidence_cell(match.match_confidence),
+                    _safe(quote.supplier),
+                    _safe(quote.product_name),
+                    _money(quote.amount, quote.currency),
+                    escape(str(quote.basis)),
+                    "; ".join(notes),
+                )
+            console.print(offers)
+
+    for warning in result.warnings:
+        console.print(f"[yellow]Hinweis[/yellow] {_safe(warning)}")
+    for item in result.items:
+        for warning in item.warnings:
+            console.print(
+                f"[yellow]Hinweis[/yellow] {_safe(item.position, missing='-')}: {_safe(warning)}"
+            )
+    for failure in result.sources_failed:
+        console.print(
+            f"[red]Preisquelle gestoert[/red] {escape(failure['source'])}: "
+            f"{escape(failure['error'])}"
+        )
 
 
 @app.command("cache-clear")

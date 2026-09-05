@@ -128,10 +128,88 @@ class FixtureSourceConfig(SourceConfig):
 
 
 #: type -> Konfigurationsklasse. Adapter registrieren hier ihre Klasse.
+class FieldSelector(BaseModel):
+    """Wo in einer Trefferzeile ein Feld steht.
+
+    Absichtlich datengetrieben: Portale aendern ihr Markup, ohne Bescheid zu
+    sagen. Ein geaenderter Selektor ist damit eine Zeile in config.yaml und
+    kein Codeaenderung-plus-Release.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    #: CSS-Selektor relativ zur Zeile; leer = die Zeile selbst.
+    selector: str | None = None
+    #: "text" oder ein Attributname ("href", "title", "datetime", ...).
+    attribute: str = "text"
+    #: Optionaler Ausdruck; die erste Gruppe (sonst der Treffer) gewinnt.
+    regex: str | None = None
+    #: Welcher Treffer, falls der Selektor mehrere Elemente findet.
+    index: int = 0
+
+
+class HtmlListSourceConfig(SourceConfig):
+    """Vergabeportal ohne API: Trefferliste als HTML auslesen.
+
+    Der Adapter ist bewusst generisch - die meisten deutschen Landesportale
+    laufen auf derselben Handvoll Produkte (AI Vergabemanager/VMP, Deutsche
+    eVergabe, cosinex). Ein neues Portal ist damit ein Konfigurationsblock.
+
+    Der Abruf laeuft ueber den normalen HTTP-Client und damit ueber robots.txt,
+    Rate-Limit und Cache. Es werden ausschliesslich oeffentlich erreichbare
+    Uebersichtsseiten gelesen - keine Anmeldung, kein Captcha, keine
+    Zugriffsbeschraenkung wird umgangen.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    type: str = "html_list"
+    #: Anzeigename des Portals (erscheint in Herkunft und Protokoll).
+    label: str | None = None
+    #: Basis fuer relative Links.
+    base_url: str
+    #: Einstiegsseite mit der Trefferliste.
+    list_url: str
+    country: str | None = None
+    region: str | None = None
+    #: Vergabestelle, falls die Liste sie nicht ausweist.
+    authority: str | None = None
+    #: Zeitzone der Fristangaben; Portale schreiben Ortszeit ohne Offset.
+    timezone: str = "Europe/Berlin"
+
+    #: CSS-Selektor der Trefferzeilen (z. B. "table.results tbody tr").
+    row_selector: str
+    #: Feldname -> Fundstelle. Bekannte Feldnamen siehe ``html_list.FIELDS``.
+    fields: dict[str, FieldSelector] = Field(default_factory=dict)
+    #: Zeilen ohne diese Felder gelten als Kopf- oder Layoutzeile.
+    required_fields: list[str] = Field(default_factory=lambda: ["title"])
+
+    #: Blaetterung ueber einen Query-Parameter (z. B. "page").
+    page_param: str | None = None
+    first_page: int = 1
+    max_pages: int = 1
+
+    #: Detailseite je Treffer nachladen - kostet einen Abruf pro Treffer.
+    follow_detail: bool = False
+    #: Obergrenze, damit ein Lauf das Portal nicht ueberrennt.
+    max_detail_requests: int = 25
+    detail_fields: dict[str, FieldSelector] = Field(default_factory=dict)
+    #: Query-Parameter der Detail-URL, der die Bekanntmachung eindeutig macht.
+    id_param: str | None = None
+
+    @field_validator("base_url", "list_url")
+    @classmethod
+    def _require_http_url(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("muss eine vollstaendige http(s)-URL sein")
+        return value.rstrip("/") if value.endswith("/") else value
+
+
 SOURCE_CONFIG_TYPES: dict[str, type[SourceConfig]] = {
     "ted": TedSourceConfig,
     "rss": RssSourceConfig,
     "fixture": FixtureSourceConfig,
+    "html_list": HtmlListSourceConfig,
 }
 
 
@@ -148,6 +226,125 @@ def parse_source_config(name: str, value: Any) -> SourceConfig:
         raise ValueError(f"sources.{name} muss ein Mapping sein, nicht {type(value).__name__}")
     config_cls = SOURCE_CONFIG_TYPES.get(str(value.get("type", "")), UnknownSourceConfig)
     return config_cls.model_validate(value)
+
+
+class PriceSourceConfig(BaseModel):
+    """Basis jeder Preisquellenkonfiguration."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    enabled: bool = True
+    type: str
+    priority: int = 50
+    requests_per_second: float | None = None
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default) if hasattr(self, key) else default
+
+
+class UnknownPriceSourceConfig(PriceSourceConfig):
+    """Unbekannter Typ macht die Konfiguration nicht ungueltig."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+#: Logische Spalten einer Preisliste -> uebliche Ueberschriften. Dient nur als
+#: Vorbelegung; ``columns`` in config.yaml ueberschreibt sie feldweise.
+DEFAULT_CATALOG_COLUMNS: dict[str, str] = {
+    "product_name": "Bezeichnung",
+    "manufacturer": "Hersteller",
+    "model_number": "Typ",
+    "article_number": "Artikelnummer",
+    "amount": "Preis",
+    "currency": "Waehrung",
+    "basis": "Preisbasis",
+    "vat_rate": "MwSt",
+    "unit": "Einheit",
+    "tiers": "Staffelpreise",
+    "shipping_cost": "Versandkosten",
+    "min_order_quantity": "Mindestmenge",
+    "packaging_unit": "Verpackungseinheit",
+    "availability": "Verfuegbarkeit",
+    "lead_time_days": "Lieferzeit",
+    "supplier": "Lieferant",
+    "url": "Link",
+    "price_date": "Preisstand",
+}
+
+
+class CatalogPriceSourceConfig(PriceSourceConfig):
+    """Lieferantenpreisliste als CSV, XLSX oder JSON."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    type: str = "catalog"
+    path: str
+    #: Lieferantenname, falls die Liste ihn nicht je Zeile ausweist.
+    supplier: str | None = None
+    encoding: str = "utf-8"
+    #: Arbeitsblatt bei XLSX; leer = erstes Blatt.
+    sheet: str | None = None
+    columns: dict[str, str] = Field(default_factory=lambda: dict(DEFAULT_CATALOG_COLUMNS))
+    default_currency: str = "EUR"
+    #: Ausdrueckliche Ansage, ob die Liste netto oder brutto ist. Ohne sie
+    #: bleibt die Bezugsgroesse UNKNOWN - das Tool raet sie nicht.
+    default_basis: str | None = None
+    default_vat_rate: float | None = None
+    shipping_included: bool | None = None
+    #: Ab welcher Namensaehnlichkeit eine Zeile als Kandidat gilt. Die
+    #: eigentliche Bewertung macht danach das begruendete Matching.
+    minimum_similarity: float = 0.34
+
+    @field_validator("default_basis")
+    @classmethod
+    def _check_basis(cls, value: str | None) -> str | None:
+        """NET/GROSS, auch in deutscher Schreibweise angegeben."""
+        if value is None:
+            return None
+        known = {"NET": "NET", "NETTO": "NET", "GROSS": "GROSS", "BRUTTO": "GROSS"}
+        resolved = known.get(value.strip().upper())
+        if resolved is None:
+            raise ValueError(
+                f"default_basis muss NET/netto oder GROSS/brutto sein, nicht {value!r}"
+            )
+        return resolved
+
+
+PRICE_SOURCE_CONFIG_TYPES: dict[str, type[PriceSourceConfig]] = {
+    "catalog": CatalogPriceSourceConfig,
+}
+
+
+def register_price_source_config(type_name: str, config_cls: type[PriceSourceConfig]) -> None:
+    PRICE_SOURCE_CONFIG_TYPES[type_name] = config_cls
+
+
+def parse_price_source_config(name: str, value: Any) -> PriceSourceConfig:
+    """Einen ``price_sources``-Eintrag mit der zu seinem ``type`` passenden Klasse lesen."""
+    if isinstance(value, PriceSourceConfig):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"price_sources.{name} muss ein Mapping sein, nicht {type(value).__name__}"
+        )
+    config_cls = PRICE_SOURCE_CONFIG_TYPES.get(str(value.get("type", "")), UnknownPriceSourceConfig)
+    return config_cls.model_validate(value)
+
+
+class PricingConfig(BaseModel):
+    """Verhalten der Preisrecherche (Stufe 4)."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    #: Angebote je Position, die behalten werden.
+    max_offers_per_item: int = 10
+    #: Positionen je Ausschreibung, fuer die recherchiert wird.
+    max_items: int = 200
+    #: Ab welcher Preisstreuung gewarnt wird (Anteil des Medians).
+    spread_warning_ratio: float = 0.5
+    #: Nur Angebote in diesen Waehrungen verwenden; leer = alle. Ein Umrechnen
+    #: unterbleibt bewusst - ein erfundener Kurs waere ein erfundener Preis.
+    currencies: list[str] = Field(default_factory=lambda: ["EUR"])
 
 
 class DedupConfig(BaseModel):
@@ -224,6 +421,9 @@ class Settings(BaseSettings):
     http: HttpConfig = Field(default_factory=HttpConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
+    #: Preisquellen der Stufe 4 (Lieferantenlisten, spaeter APIs).
+    price_sources: dict[str, PriceSourceConfig] = Field(default_factory=dict)
+    pricing: PricingConfig = Field(default_factory=PricingConfig)
     dedup: DedupConfig = Field(default_factory=DedupConfig)
     criteria: CriteriaConfig = Field(default_factory=CriteriaConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
@@ -244,6 +444,14 @@ class Settings(BaseSettings):
         if not isinstance(value, dict):
             return value
         return {name: parse_source_config(name, entry) for name, entry in value.items()}
+
+    @field_validator("price_sources", mode="before")
+    @classmethod
+    def _parse_price_sources(cls, value: Any) -> Any:
+        """Jede Preisquelle mit der Klasse ihres ``type`` validieren."""
+        if not isinstance(value, dict):
+            return value
+        return {name: parse_price_source_config(name, entry) for name, entry in value.items()}
 
     @classmethod
     def settings_customise_sources(

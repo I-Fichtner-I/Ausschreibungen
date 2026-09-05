@@ -32,7 +32,7 @@ def _ensure_loaded() -> None:
     if _loaded:
         return
     # Import registriert die eingebauten Adapter ueber den Dekorator.
-    from . import fixture, rss, ted  # noqa: F401
+    from . import fixture, html_list, rss, ted  # noqa: F401
 
     _loaded = True
 
