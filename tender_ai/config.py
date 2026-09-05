@@ -347,6 +347,40 @@ class PricingConfig(BaseModel):
     currencies: list[str] = Field(default_factory=lambda: ["EUR"])
 
 
+class CalculationConfig(BaseModel):
+    """Wie aus Einkaufspreisen ein Angebotspreis wird (Stufe 5)."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    #: Aufschlag auf die Selbstkosten, in Prozent. Bestimmt den Angebotspreis.
+    markup_percent: float = 25.0
+    #: Gemeinkostenzuschlag auf den Einkaufswert, in Prozent.
+    overhead_percent: float = 8.0
+    #: Pauschale je Position (Bestellung, Wareneingang, Handling).
+    handling_cost_per_position: float = 0.0
+    #: Pauschale je Auftrag (Angebotserstellung, Projektaufwand).
+    fixed_cost_per_tender: float = 0.0
+    #: Versandkosten aus den Angeboten mitrechnen.
+    include_shipping: bool = True
+    #: Ohne diese Abdeckung wird nicht bewertet: die Marge eines Bruchteils
+    #: der Positionen ist nicht die Marge des Auftrags.
+    minimum_coverage_percent: int = 80
+
+    @field_validator("markup_percent", "overhead_percent")
+    @classmethod
+    def _not_negative(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("darf nicht negativ sein")
+        return value
+
+    @field_validator("minimum_coverage_percent")
+    @classmethod
+    def _percent_range(cls, value: int) -> int:
+        if not 0 <= value <= 100:
+            raise ValueError("muss zwischen 0 und 100 liegen")
+        return value
+
+
 class DedupConfig(BaseModel):
     enabled: bool = True
     title_similarity_threshold: float = 0.90
@@ -424,6 +458,7 @@ class Settings(BaseSettings):
     #: Preisquellen der Stufe 4 (Lieferantenlisten, spaeter APIs).
     price_sources: dict[str, PriceSourceConfig] = Field(default_factory=dict)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
+    calculation: CalculationConfig = Field(default_factory=CalculationConfig)
     dedup: DedupConfig = Field(default_factory=DedupConfig)
     criteria: CriteriaConfig = Field(default_factory=CriteriaConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)

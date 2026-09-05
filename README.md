@@ -28,7 +28,12 @@ testbar, bevor die naechste beginnt.
 > zu und verdichtet sie zu einem Preisbild - mit Netto/Brutto-Status, Staffel-
 > preisen, Versandkosten und Verfuegbarkeit.
 >
-> Die Stufen 5-6 (Kalkulation, Marge, Scoring, Dashboard) folgen danach -
+> **Stufe 5 laeuft: Kosten, Marge und Entscheidungsvorlage.**
+> `tender-ai calculate <id>` rechnet Einkauf, Versand und Zuschlaege zu
+> Selbstkosten, daraus einen Angebotspreis, und bewertet das Ergebnis gegen die
+> Mindestkriterien. **Kein Angebot** - die Abgabe bleibt Handarbeit.
+>
+> Stufe 6 (Dashboard, Benachrichtigungen, Angebotsentwurf) folgt danach -
 > siehe [docs/architecture.md](docs/architecture.md).
 
 ---
@@ -181,7 +186,52 @@ Ein einzelnes Angebot wird als solches ausgewiesen ("ein Datenpunkt, kein
 Marktpreis"), und eine grosse Preisstreuung als Warnsignal - sie bedeutet fast
 immer, dass unter den Angeboten etwas ist, das nicht dazugehoert.
 
-### 7. Echte Recherche
+### 7. Kalkulieren und bewerten (Stufe 5)
+
+```bash
+tender-ai calculate ted:00123456-2026              # Marge und Urteil
+tender-ai calculate ted:00123456-2026 --positions  # Kosten je Position
+tender-ai calculate --all -n 50                    # priorisierte Vorlage
+```
+
+```
+Urteil: NICHT BEWERTBAR
+Abdeckung: 40 % (2 von 5 Positionen kalkuliert)
+Erwartungsfall: Kosten 30.877,20 EUR, Angebotspreis 38.596,50 EUR, Marge 20,0 %
+
+Fall                    Kosten   Angebotspreis          Marge   Marge %  Rendite %
+guenstigster Einkauf  27.410,40      38.596,50      11.186,10      29.0       40.8
+Median (Angebotsbasis)  30.877,20      38.596,50       7.719,30      20.0       25.0
+teuerster Einkauf     34.344,00      38.596,50       4.252,50      11.0       12.4
+
+Hinweis Abdeckung 40 Prozent liegt unter der geforderten 80 Prozent -
+        die Datenlage traegt keine Bewertung.
+```
+
+**Die Szenarien halten den Angebotspreis fest.** In einer Ausschreibung wird
+einmal geboten, eingekauft wird spaeter - genau darin liegt das Risiko. Waechst
+der Angebotspreis mit dem Einkauf mit, ist die Marge in jedem Fall gleich und
+die Tabelle sagt nichts. So zeigt sie, dass derselbe Preis je nach Einkauf
+29 Prozent oder nur 11 Prozent Marge traegt - letzteres unter der Mindestmarge.
+Die drei Einkaufspreise stammen aus echten Angeboten (guenstigstes, mittleres,
+teuerstes), nicht aus einem erfundenen Streubereich.
+
+**Eine unvollstaendige Preisbasis ergibt keine Marge.** Sind nur 40 Prozent der
+Positionen bepreist, ist deren Marge nicht die Marge des Auftrags. Unterhalb
+`calculation.minimum_coverage_percent` lautet das Urteil **NICHT BEWERTBAR** -
+nicht "uninteressant", denn das waere eine Aussage, die niemand geprueft hat.
+
+**Ein verletztes Mindestkriterium schlaegt jeden Score.** Die Kriterien aus
+`criteria` stehen mit Soll- und Ist-Wert daneben; ein nicht pruefbares Kriterium
+(z. B. Risiko ohne vorherige Analyse) gilt als **offen**, nie als erfuellt -
+sonst saehe eine Datenluecke aus wie ein Erfolg.
+
+> **Das Tool gibt nichts ab.** `calculate` erzeugt eine Entscheidungsvorlage.
+> Der Ablauf bleibt: Analyse → Freigabe durch den Nutzer → Angebotsentwurf →
+> manuelle Pruefung → manuelle Abgabe. Auch die JSON-Ausgabe traegt
+> `is_binding_offer: false` und `requires_user_approval: true`.
+
+### 8. Echte Recherche
 
 ```bash
 # EU-weit (TED) nach Monitoren, veroeffentlicht in den letzten 14 Tagen
@@ -216,6 +266,8 @@ tender-ai runs                              # Laufprotokoll + Quellenstatus
 | `tender-ai items --all [-n N]` | Positionen aller laufenden Ausschreibungen erkennen |
 | `tender-ai prices <id> [--offers]` | Preise zu den Positionen recherchieren (Stufe 4) |
 | `tender-ai prices --all [-n N]` | Preise aller laufenden Ausschreibungen recherchieren |
+| `tender-ai calculate <id> [--positions]` | Kosten, Marge, Entscheidungsvorlage (Stufe 5) |
+| `tender-ai calculate --all [-n N]` | priorisierte Vorlage ueber alle Ausschreibungen |
 | `tender-ai export <datei>` | JSON / CSV / XLSX |
 | `tender-ai runs` | letzte Laeufe und Quellenstatus |
 | `tender-ai cache-clear` | HTTP-Cache leeren |
@@ -423,6 +475,7 @@ tender_ai/
 ├── analysis/              Anforderungserkennung (Regeln) und Risiko-Score
 ├── items/                 Artikelerkennung: Spaltenrollen, Einheiten, Positionen
 ├── pricing/               Produkt-Matching, Preisstatistik, Preisquellen
+├── calculation/           Kosten, Szenarien, Mindestkriterien, Urteil
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
 ├── database/              SQLAlchemy-Modelle, Session, Repository, Alembic-Migrationen
 └── export/                JSON / CSV / XLSX
@@ -430,9 +483,8 @@ tests/                     Offline-Tests (respx-Mocks)
 config.yaml  .env.example  docs/architecture.md
 ```
 
-Naechste Stufe: **Kosten und Marge** - aus Einkaufspreis, Versand, Nebenkosten
-und erwartetem Verkaufserlös die Profitabilitaet je Position und je
-Ausschreibung berechnen, mit Szenarien und Mindestkriterien.
+Naechste Stufe: **Dashboard und Angebotsentwurf** - Ueberblick, Freigabe durch
+den Nutzer und daraus ein Angebotsentwurf zur manuellen Pruefung.
 Details in [docs/architecture.md](docs/architecture.md).
 
 ## Review und Roadmap
