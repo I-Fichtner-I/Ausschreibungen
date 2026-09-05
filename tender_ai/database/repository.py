@@ -21,12 +21,15 @@ from ..models.analysis import AnalysisResult
 from ..models.common import Provenance, blocking_key, normalize_text, utcnow
 from ..models.document import ExtractedDocument
 from ..models.item import ItemExtractionResult, TenderItem
+from ..models.price import PricingResult
 from ..models.tender import Tender, TenderDocument, TenderStatus
 from ..pipeline.dedup import DuplicateDetector, DuplicateMatch
 from .models import (
     DocumentExtractRecord,
     IngestRunRecord,
     ItemExtractionRecord,
+    PriceQuoteRecord,
+    PriceResearchRecord,
     RiskAnalysisRecord,
     SourceStateRecord,
     TenderAliasRecord,
@@ -526,6 +529,97 @@ class TenderRepository:
             provenance=provenance,
             warnings=list(record.warnings or []),
         )
+
+    def save_pricing(
+        self, result: PricingResult, tender_record: TenderRecord | None = None
+    ) -> PriceResearchRecord:
+        """Preisrecherche speichern - der Lauf ersetzt das Vorergebnis.
+
+        Preise altern; ein Zusammenfuehren alter und neuer Angebote wuerde
+        genau die Frage verwischen, auf die es ankommt: von wann ist der Preis,
+        mit dem gerechnet wird.
+        """
+        for existing in self.quotes_for(result.tender_id):
+            self.session.delete(existing)
+        self.session.flush()
+
+        items_by_key = {
+            (record.position or "", record.title): record
+            for record in self.items_for(result.tender_id)
+        }
+        for item in result.items:
+            item_record = items_by_key.get((item.position or "", item.title))
+            if item_record is None:  # pragma: no cover - Position zwischenzeitlich weg
+                continue
+            for rank, match in enumerate(item.matches):
+                quote = match.quote
+                net, _reason = quote.net_amount(item.quantity)
+                provenance = quote.provenance
+                self.session.add(
+                    PriceQuoteRecord(
+                        item_id=item_record.id,
+                        tender_id=result.tender_id,
+                        rank=rank,
+                        source=provenance.source if provenance else quote.supplier,
+                        supplier=quote.supplier,
+                        product_name=quote.product_name,
+                        manufacturer=quote.manufacturer,
+                        model_number=quote.model_number,
+                        article_number=quote.article_number,
+                        amount=quote.amount,
+                        currency=quote.currency,
+                        basis=str(quote.basis),
+                        vat_rate=quote.vat_rate,
+                        net_amount=net,
+                        unit=quote.unit,
+                        tiers=_json_ready(
+                            [
+                                {"min_quantity": tier.min_quantity, "amount": tier.amount}
+                                for tier in quote.tiers
+                            ]
+                        ),
+                        shipping_cost=quote.shipping_cost,
+                        shipping_included=quote.shipping_included,
+                        min_order_quantity=quote.min_order_quantity,
+                        availability=str(quote.availability),
+                        lead_time_days=quote.lead_time_days,
+                        match_confidence=match.match_confidence,
+                        reasons=list(match.reasons),
+                        concerns=list(match.concerns),
+                        warnings=list(quote.warnings),
+                        url=quote.url,
+                        document=provenance.document if provenance else None,
+                        original_text=provenance.original_text if provenance else None,
+                        retrieved_at=quote.retrieved_at,
+                    )
+                )
+
+        record = self.session.get(PriceResearchRecord, result.tender_id)
+        if record is None:
+            record = PriceResearchRecord(tender_id=result.tender_id)
+            self.session.add(record)
+        if tender_record is not None:
+            record.content_hash = tender_record.content_hash
+        record.item_count = len(result.items)
+        record.usable_count = result.usable_count
+        record.coverage_percent = result.coverage_percent
+        record.sources_used = list(result.sources_used)
+        record.sources_failed = _json_ready(result.sources_failed)
+        record.warnings = list(result.warnings)
+        record.researched_at = result.researched_at
+        self.session.flush()
+        return record
+
+    def quotes_for(self, tender_id: str, item_id: int | None = None) -> list[PriceQuoteRecord]:
+        query = select(PriceQuoteRecord).where(PriceQuoteRecord.tender_id == tender_id)
+        if item_id is not None:
+            query = query.where(PriceQuoteRecord.item_id == item_id)
+        return list(
+            self.session.scalars(query.order_by(PriceQuoteRecord.item_id, PriceQuoteRecord.rank))
+        )
+
+    def price_research_for(self, tender_id: str) -> PriceResearchRecord | None:
+        return self.session.get(PriceResearchRecord, tender_id)
 
     def save_requirements(self, record: TenderRecord, tender: Tender) -> None:
         """Erkannte Anforderungen im Tender-Payload festhalten."""

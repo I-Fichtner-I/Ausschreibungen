@@ -25,11 +25,11 @@ Stufe ein echter Zwischenstand vorhanden statt eines halbfertigen Ganzen.
 | **1** | **Ausschreibungen recherchieren** - Quell-Adapter, einheitliches Datenmodell, Dubletten, Speicherung, Aenderungserkennung, Export, CLI | **fertig, testbar** |
 | **2** | **Ausschreibung analysieren** - Dokumentendownload, Textextraktion (PDF/DOCX/XLSX/HTML/CSV), Anforderungserkennung und begruendeter Risiko-Score | **fertig, testbar** |
 | **3** | **Artikel extrahieren** - Spaltenrollen und Einheiten erkennen, `TenderItem` mit Menge, Einheit, Hersteller/Typ, Merkmalen und Fundstelle | **fertig, testbar** |
-| 4 | Produkt-Matching und Preisrecherche - Lieferanten, `PriceOffer`, Preisstatistik | offen |
+| **4** | **Produkt-Matching und Preisrecherche** - begruendete Zuordnung mit `match_confidence`, Preisquellen (Lieferantenlisten), Preisbild je Position | **fertig, testbar** |
 | 5 | Kosten, Profitabilitaet, Szenarien, Score, Entscheidungsvorlage | offen |
 | 6 | Dashboard, Benachrichtigungen, Scheduler, Angebotsentwurf | offen |
 
-Die Stufen 4-6 haben ihre Andockpunkte bereits im Code: `Tender.documents`,
+Die Stufen 5-6 haben ihre Andockpunkte bereits im Code: `Tender.documents`,
 `TenderRequirements`, die Konfigurationsbloecke `criteria`/`scoring` und die
 Fremdschluessel-Konvention `tender_id` in der Datenbank.
 
@@ -50,8 +50,8 @@ Fremdschluessel-Konvention `tender_id` in der Datenbank.
                                |
    +-----------+------------+------------+-----------+--------+
    | sources/  | extraction/|  analysis/ |  items/   |pricing/|  (Stufe 2-4)
-   | TED, RSS, | PDF, DOCX, | Anforderun-| Positionen| Liefe- |
-   | Fixture   | XLSX, HTML | gen, Risiko| Mengen    | ranten |
+   | TED, RSS, | PDF, DOCX, | Anforderun-| Positionen| Preise,|
+   | HTML, Fix.| XLSX, HTML | gen, Risiko| Mengen    | Matching|
    +-----------+------------+------------+-----------+--------+
                                |
                     +----------v----------+
@@ -119,6 +119,29 @@ Dokumente und Tabellen, genutzte Tabellen, Warnungen), damit ein leeres
 Ergebnis erklaerbar bleibt: "keine Tabelle gefunden" ist etwas anderes als
 "keine Unterlagen vorhanden".
 
+### Stufe 4 (implementiert)
+
+`PriceQuote` - ein Preis bei einem Lieferanten, zu einem Zeitpunkt: Betrag,
+Waehrung, `basis` (NET/GROSS/UNKNOWN), Steuersatz, Einheit, Staffelpreise,
+Versandkosten, Mindestmenge, Verfuegbarkeit, Lieferzeit, Herkunft.
+
+Der Kern ist `net_amount()`: aus einem Bruttopreis **ohne** ausgewiesenen
+Steuersatz entsteht dort kein Nettopreis, sondern ein Grund. 19 Prozent zu
+unterstellen waere bei ermaessigten Saetzen, Auslandslieferungen oder
+Reverse-Charge falsch - und der Fehler zeigte sich erst in der Marge.
+
+`ProductMatch` verbindet ein Angebot mit einer Position und traegt neben
+`match_confidence` zwei Listen: `reasons` (warum die Zuordnung gilt) und
+`concerns` (was dagegen spricht). Ein Einwand verschwindet damit nicht im
+Score, sondern bleibt lesbar - und deckelt ihn: eine Fabrikatsvorgabe ohne
+Gleichwertigkeitsklausel kappt ein fremdes Fabrikat auf 20 Punkte, eine
+abweichende Mengeneinheit auf 55.
+
+`PriceStatistics` sagt zusaetzlich, wie belastbar das Preisbild ist: aus wie
+vielen Angeboten es stammt (`is_single_source`) und wie weit sie auseinander-
+liegen (`spread_ratio`). Eine grosse Streuung ist das nuetzlichste Warnsignal
+der Stufe - sie bedeutet fast immer, dass ein unpassendes Produkt darunter ist.
+
 ### Datenbank (Stufe 1)
 
 `tenders`, `tender_aliases` (weitere Fundstellen derselben Ausschreibung),
@@ -134,8 +157,12 @@ Seit Stufe 3: `tender_items` (eine Zeile je erkannter Position, mit Fundstelle
 und Originalzeile) und `item_extractions` (Kennzahlen des Laufs je
 Ausschreibung, ebenfalls mit `content_hash` fuer den Stapellauf).
 
-Geplant ab Stufe 4: `suppliers`, `price_offers`, `cost_calculations`,
-`profitability_analyses`, `analysis_history`.
+Seit Stufe 4: `price_quotes` (ein Angebot je Position, mit Zuordnungsguete,
+Begruendungen, Einwaenden und Abrufzeitpunkt - Preise altern) und
+`price_research` (Kennzahlen des Laufs je Ausschreibung, mit `content_hash`).
+
+Geplant ab Stufe 5: `cost_calculations`, `profitability_analyses`,
+`analysis_history`.
 
 ---
 

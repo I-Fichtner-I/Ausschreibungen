@@ -22,8 +22,14 @@ testbar, bevor die naechste beginnt.
 > Positionen - Ordnungszahl, Bezeichnung, Menge, Einheit, Hersteller, Typ,
 > Artikelnummer und Merkmale, jede mit Fundstelle und Konfidenz.
 >
-> Die Stufen 4-6 (Preisrecherche, Kalkulation, Scoring, Dashboard) folgen
-> danach - siehe [docs/architecture.md](docs/architecture.md).
+> **Stufe 4 laeuft: Preise zu den Positionen recherchieren.**
+> `tender-ai prices <id>` befragt die konfigurierten Preisquellen
+> (Lieferantenpreislisten als CSV, XLSX, JSON), ordnet die Treffer **begruendet**
+> zu und verdichtet sie zu einem Preisbild - mit Netto/Brutto-Status, Staffel-
+> preisen, Versandkosten und Verfuegbarkeit.
+>
+> Die Stufen 5-6 (Kalkulation, Marge, Scoring, Dashboard) folgen danach -
+> siehe [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -125,7 +131,57 @@ Eine Fabrikatsvorgabe ohne "oder gleichwertig" in derselben Position wird als
 `brand_locked` markiert - genau die Konstellation, die Alternativangebote
 ausschliesst.
 
-### 6. Echte Recherche
+### 6. Preise recherchieren (Stufe 4)
+
+```bash
+tender-ai prices ted:00123456-2026                      # Preisbild je Position
+tender-ai prices ted:00123456-2026 --offers             # jedes Angebot mit Begruendung
+tender-ai prices ted:00123456-2026 --min-confidence 70  # Schwelle fuer diesen Lauf
+tender-ai prices --all -n 50                            # Stapellauf
+```
+
+```
+Positionen: 5, kalkulationsfaehig: 2 (40 % Abdeckung)
+Pos.   Bezeichnung                                Menge   Bester Preis   Guete  Angebote
+1.10   Monitor 27 Zoll, Fabrikat: Muster GmbH …   120.0     172,50 EUR      90         2
+1.20   Dockingstation USB-C, Art.-Nr. DS-4711 …   120.0      92,50 EUR      95         1
+1.30   Hoehenverstellbarer Schreibtisch 160x80     60.0        UNKNOWN      45         1
+
+Hinweis 1.30: Bestes Angebot erreicht nur 45 von 85 Punkten Zuordnungsguete -
+              zur Pruefung, nicht zur Kalkulation.
+```
+
+Preisquellen stehen in `config.yaml` unter `price_sources`. Bevorzugt werden
+**Lieferantenpreislisten**: der Einkaufspreis aus der eigenen Liste ist der
+Preis, zu dem tatsaechlich beschafft wird - ein Schaufensterpreis ist es nicht.
+Spaltenzuordnung, Waehrung und Netto/Brutto-Vorgabe sind konfigurierbar;
+`tender-ai doctor` liest die Liste einmal und meldet, wie viele Zeilen
+kalkulationsfaehig sind.
+
+Drei Regeln, die verhindern, dass eine Kalkulation still falsch wird:
+
+- **Netto und Brutto werden nie stillschweigend umgerechnet.** Ein Bruttopreis
+  ohne ausgewiesenen Steuersatz liefert **keinen** Nettopreis - 19 Prozent zu
+  unterstellen ist bei ermaessigten Saetzen, Auslandslieferungen oder
+  Reverse-Charge schlicht falsch, und der Fehler faellt erst in der Marge auf.
+- **Waehrungen werden nicht umgerechnet.** Ein erfundener Kurs waere ein
+  erfundener Preis; Angebote in anderer Waehrung werden ausgewiesen, nicht
+  verrechnet.
+- **Die Zuordnung ist begruendet und gedeckelt.** Artikelnummer (95) > Hersteller
+  und Typ (85) > identische Bezeichnung (75) > nur Typ (65) > Namensaehnlichkeit
+  (bis 60). Unterhalb `criteria.minimum_match_confidence` ist ein Angebot ein
+  Vorschlag zur Pruefung, keine Grundlage einer Marge.
+
+Die wichtigste Sperre: traegt eine Position eine **Fabrikatsvorgabe ohne
+"oder gleichwertig"**, wird ein Angebot mit anderem Fabrikat auf Guete 20
+gedeckelt - auch und gerade das billigere. Genau dieser Treffer laesst sonst
+jede Marge grossartig aussehen, bis geliefert werden muss.
+
+Ein einzelnes Angebot wird als solches ausgewiesen ("ein Datenpunkt, kein
+Marktpreis"), und eine grosse Preisstreuung als Warnsignal - sie bedeutet fast
+immer, dass unter den Angeboten etwas ist, das nicht dazugehoert.
+
+### 7. Echte Recherche
 
 ```bash
 # EU-weit (TED) nach Monitoren, veroeffentlicht in den letzten 14 Tagen
@@ -158,6 +214,8 @@ tender-ai runs                              # Laufprotokoll + Quellenstatus
 | `tender-ai analyze --all [-n N]` | alle laufenden Ausschreibungen bewerten |
 | `tender-ai items <id> [--evidence]` | Positionen des Leistungsverzeichnisses erkennen (Stufe 3) |
 | `tender-ai items --all [-n N]` | Positionen aller laufenden Ausschreibungen erkennen |
+| `tender-ai prices <id> [--offers]` | Preise zu den Positionen recherchieren (Stufe 4) |
+| `tender-ai prices --all [-n N]` | Preise aller laufenden Ausschreibungen recherchieren |
 | `tender-ai export <datei>` | JSON / CSV / XLSX |
 | `tender-ai runs` | letzte Laeufe und Quellenstatus |
 | `tender-ai cache-clear` | HTTP-Cache leeren |
@@ -364,6 +422,7 @@ tender_ai/
 ├── extraction/            PDF, DOCX, XLSX, HTML, Text/CSV -> Seiten und Tabellen
 ├── analysis/              Anforderungserkennung (Regeln) und Risiko-Score
 ├── items/                 Artikelerkennung: Spaltenrollen, Einheiten, Positionen
+├── pricing/               Produkt-Matching, Preisstatistik, Preisquellen
 ├── pipeline/              ingest.py (Lauforchestrierung), dedup.py
 ├── database/              SQLAlchemy-Modelle, Session, Repository, Alembic-Migrationen
 └── export/                JSON / CSV / XLSX
@@ -371,9 +430,9 @@ tests/                     Offline-Tests (respx-Mocks)
 config.yaml  .env.example  docs/architecture.md
 ```
 
-Naechste Stufe: **Marktpreise recherchieren** - zu jeder erkannten Position
-Lieferanten und Preise finden, jede Preisangabe mit Quelle, Zeitpunkt,
-Waehrung, Netto/Brutto-Status, Versandkosten und Verfuegbarkeit.
+Naechste Stufe: **Kosten und Marge** - aus Einkaufspreis, Versand, Nebenkosten
+und erwartetem Verkaufserlös die Profitabilitaet je Position und je
+Ausschreibung berechnen, mit Szenarien und Mindestkriterien.
 Details in [docs/architecture.md](docs/architecture.md).
 
 ## Review und Roadmap

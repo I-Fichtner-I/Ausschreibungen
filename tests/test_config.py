@@ -130,6 +130,16 @@ def test_shipped_config_yaml_is_valid():
     for name, source in settings.sources.items():
         assert isinstance(source, SourceConfig), name
 
+    from tender_ai.config import CatalogPriceSourceConfig, PriceSourceConfig
+
+    for name, price_source in settings.price_sources.items():
+        assert isinstance(price_source, PriceSourceConfig), name
+    price_list = settings.price_sources["beispiel_liste"]
+    assert isinstance(price_list, CatalogPriceSourceConfig)
+    assert price_list.enabled is False  # Demoliste, nicht die des Nutzers
+    assert Path(price_list.path).exists(), "Beispielpreisliste fehlt"
+    assert price_list.default_basis == "NET"
+
     portal = settings.sources["evergabe_nrw"]
     assert isinstance(portal, HtmlListSourceConfig)
     # Bewusst aus: die Selektoren sind erst mit "doctor" am echten Portal
